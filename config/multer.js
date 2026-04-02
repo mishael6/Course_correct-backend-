@@ -1,8 +1,24 @@
 const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
-// Use memory storage — we upload the buffer directly to Cloudinary
-// instead of saving to disk first
-const storage = multer.memoryStorage();
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure disk storage
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    // Generate unique filename: courseCode_timestamp.pdf
+    const filename = `${file.originalname.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
+    cb(null, filename);
+  }
+});
 
 const fileFilter = (req, file, cb) => {
   if (file.mimetype === 'application/pdf') {

@@ -2,8 +2,10 @@ const Upload = require('../models/Upload');
 const cloudinary = require('../config/cloudinary');
 const { checkAccess } = require('./subscriptionController');
 const streamifier = require('streamifier');
+const path = require('path');
+const fs = require('fs');
 
-// ─── Helper: upload buffer to Cloudinary ─────────────────────────────────────
+// ─── Helper: upload buffer to Cloudinary (kept for backward compat) ─────────────────────────────────────
 const uploadToCloudinary = (buffer, folder, publicId) => {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
@@ -37,24 +39,18 @@ exports.uploadFile = async (req, res) => {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    const folder = 'course_correct/documents';
-    const filename = `${courseCode.replace(/\s+/g, '_')}_${Date.now()}`;
+    // File is already saved to disk by multer
+    const filePath = `/uploads/${req.file.filename}`;
+    const fileName = req.file.originalname;
 
-    const cloudinaryResult = await uploadToCloudinary(
-      req.file.buffer,
-      folder,
-      filename
-    );
-
-    // Use Cloudinary's returned public_id (includes folder path)
     const newUpload = new Upload({
       title,
       courseCode,
       institution,
       year: Number(year),
       price: Number(price),
-      fileUrl: cloudinaryResult.secure_url,
-      cloudinaryPublicId: cloudinaryResult.public_id,
+      filePath,
+      fileName,
       uploader: req.user.id
     });
 
@@ -133,19 +129,32 @@ exports.downloadUpload = async (req, res) => {
       });
     }
 
-    // Generate fresh public URL from public_id
-    const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
-      resource_type: 'raw',
-      type: 'upload',
-      secure: true
-    });
-
-    res.json({
-      fileUrl: publicUrl,
-      title: upload.title,
-      accessType: reason,
-      expiresIn: '1 hour'
-    });
+    // If using local file storage
+    if (upload.filePath) {
+      const fullPath = path.join(__dirname, '../' + upload.filePath);
+      res.json({
+        fileUrl: `${process.env.API_URL || 'http://localhost:5000'}${upload.filePath}`,
+        title: upload.title,
+        accessType: reason,
+        expiresIn: '1 hour'
+      });
+    } 
+    // Fallback for old Cloudinary records
+    else if (upload.cloudinaryPublicId) {
+      const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
+        resource_type: 'raw',
+        type: 'upload',
+        secure: true
+      });
+      res.json({
+        fileUrl: publicUrl,
+        title: upload.title,
+        accessType: reason,
+        expiresIn: '1 hour'
+      });
+    } else {
+      return res.status(404).json({ message: 'File not found' });
+    }
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');

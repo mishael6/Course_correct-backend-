@@ -6,8 +6,10 @@ const uploadSchema = new mongoose.Schema({
   institution: { type: String, required: true },
   year: { type: Number, required: true },
   price: { type: Number, required: true },
-  fileUrl: { type: String, required: true },           // Cloudinary secure URL
-  cloudinaryPublicId: { type: String, required: true }, // For signed URLs & deletion
+  filePath: { type: String, required: true },      // Local file path: /uploads/filename.pdf
+  fileName: { type: String, required: true },      // Original file name
+  fileUrl: { type: String },                        // Deprecated - for backward compatibility
+  cloudinaryPublicId: { type: String },             // Deprecated - for backward compatibility
   status: { 
     type: String, 
     enum: ['pending', 'approved', 'rejected'], 

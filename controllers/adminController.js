@@ -4,6 +4,7 @@ const Wallet = require('../models/Wallet');
 const User = require('../models/User');
 const payloqa = require('../services/payloqa');
 const cloudinary = require('../config/cloudinary');
+const path = require('path');
 
 const toE164 = (phone) => {
   const digits = phone.replace(/\D/g, '');
@@ -106,18 +107,29 @@ exports.downloadUpload = async (req, res) => {
       return res.status(404).json({ message: 'Upload not found' });
     }
 
-    // Generate fresh public URL from public_id (admins bypass status/access checks)
-    const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
-      resource_type: 'raw',
-      type: 'upload',
-      secure: true
-    });
-
-    res.json({
-      fileUrl: publicUrl,
-      title: upload.title,
-      expiresIn: '1 hour'
-    });
+    // If using local file storage
+    if (upload.filePath) {
+      res.json({
+        fileUrl: `${process.env.API_URL || 'http://localhost:5000'}${upload.filePath}`,
+        title: upload.title,
+        expiresIn: 'permanent'
+      });
+    }
+    // Fallback for old Cloudinary records
+    else if (upload.cloudinaryPublicId) {
+      const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
+        resource_type: 'raw',
+        type: 'upload',
+        secure: true
+      });
+      res.json({
+        fileUrl: publicUrl,
+        title: upload.title,
+        expiresIn: '1 hour'
+      });
+    } else {
+      return res.status(404).json({ message: 'File not found' });
+    }
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');

@@ -118,7 +118,7 @@ exports.downloadUpload = async (req, res) => {
       return res.status(404).json({ message: 'Upload not found' });
     }
 
-    // If using local file storage
+    // Serve from local file storage (primary)
     if (upload.filePath) {
       const path = require('path');
       const fs = require('fs');
@@ -133,46 +133,27 @@ exports.downloadUpload = async (req, res) => {
         const filename = path.basename(upload.filePath);
         const encodedPath = `/uploads/${encodeURIComponent(filename)}`;
         
-        res.json({
+        return res.json({
           fileUrl: `${baseUrl}${encodedPath}`,
           title: upload.title,
           expiresIn: 'permanent'
         });
-      } else if (upload.cloudinaryPublicId) {
-        // Local file missing - fallback to Cloudinary if available
-        const cloudinary = require('../config/cloudinary');
-        console.warn(`Local file missing for upload ${upload._id}, using Cloudinary fallback`);
-        const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
-          resource_type: 'raw',
-          type: 'upload',
-          secure: true,
-          format: 'pdf'
-        });
-        res.json({
-          fileUrl: publicUrl,
-          title: upload.title,
-          expiresIn: '1 hour'
-        });
       } else {
-        return res.status(404).json({ 
-          message: 'File not found on server. Please contact admin.' 
-        });
+        // Local file missing
+        console.warn(`Local file missing for upload ${upload._id}`);
+        if (upload.cloudinaryPublicId) {
+          return res.status(404).json({
+            message: 'File not available locally. Has Cloudinary backup for recovery.',
+            hasBackup: true,
+            uploadId: upload._id,
+            cloudinaryId: upload.cloudinaryPublicId
+          });
+        } else {
+          return res.status(404).json({ 
+            message: 'File not found on server.' 
+          });
+        }
       }
-    }
-    // Fallback for old Cloudinary records
-    else if (upload.cloudinaryPublicId) {
-      const cloudinary = require('../config/cloudinary');
-      const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
-        resource_type: 'raw',
-        type: 'upload',
-        secure: true,
-        format: 'pdf'
-      });
-      res.json({
-        fileUrl: publicUrl,
-        title: upload.title,
-        expiresIn: '1 hour'
-      });
     } else {
       return res.status(404).json({ message: 'File not found' });
     }

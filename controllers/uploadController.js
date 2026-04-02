@@ -163,59 +163,40 @@ exports.downloadUpload = async (req, res) => {
       accessReason = reason;
     }
 
-    // If using local file storage
+    // Serve from local file storage (primary)
     if (upload.filePath) {
-      // Check if file actually exists on disk
       const uploadsDir = path.join(__dirname, '../uploads');
       const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
       
       if (fs.existsSync(fullPath)) {
-        // File exists - return URL with proper encoding
+        // File exists - return direct URL for download
         const baseUrl = `${req.protocol}://${req.get('host')}`;
         const filename = path.basename(upload.filePath);
         const encodedPath = `/uploads/${encodeURIComponent(filename)}`;
         
-        res.json({
+        return res.json({
           fileUrl: `${baseUrl}${encodedPath}`,
           title: upload.title,
           accessType: accessReason,
-          expiresIn: '1 hour'
-        });
-      } else if (upload.cloudinaryPublicId) {
-        // Local file missing - fallback to Cloudinary if available
-        console.warn(`Local file missing for upload ${upload._id}, using Cloudinary fallback`);
-        const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
-          resource_type: 'raw',
-          type: 'upload',
-          secure: true,
-          format: 'pdf'
-        });
-        res.json({
-          fileUrl: publicUrl,
-          title: upload.title,
-          accessType: accessReason,
-          expiresIn: '1 hour'
+          expiresIn: 'permanent'
         });
       } else {
-        return res.status(404).json({ 
-          message: 'File not found on server. Please contact admin.' 
-        });
+        // Local file missing
+        console.warn(`Local file missing for upload ${upload._id}`);
+        if (upload.cloudinaryPublicId) {
+          // Suggest admin can recover from backup
+          return res.status(404).json({
+            message: 'File temporarily unavailable. Has Cloudinary backup. Please contact admin to recover.',
+            hasBackup: true,
+            uploadId: upload._id,
+            cloudinaryId: upload.cloudinaryPublicId
+          });
+        } else {
+          return res.status(404).json({ 
+            message: 'File not found. Please contact admin.' 
+          });
+        }
       }
-    } 
-    // Fallback for old Cloudinary records
-    else if (upload.cloudinaryPublicId) {
-      const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
-        resource_type: 'raw',
-        type: 'upload',
-        secure: true,
-        format: 'pdf'
-      });
-      res.json({
-        fileUrl: publicUrl,
-        title: upload.title,
-        accessType: accessReason,
-        expiresIn: '1 hour'
-      });
     } else {
       return res.status(404).json({ message: 'File not found' });
     }

@@ -8,9 +8,35 @@ dotenv.config();
 
 const app = express();
 
+// Configure CORS for different environments
+const corsOptions = {
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      'http://localhost:3000',           // Local development
+      'http://localhost:5173',           // Vite dev server
+      'https://coursecorrekt.netlify.app', // Production Netlify
+      'https://www.coursecorrekt.netlify.app'
+    ];
+
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`⚠ CORS request denied from origin: ${origin}`);
+      callback(new Error('CORS policy violation'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token'],
+  maxAge: 86400 // 24 hours
+};
+
 // Middleware
 app.use(express.json());
-app.use(cors());
+app.use(cors(corsOptions));
 
 // Serve uploaded files statically
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

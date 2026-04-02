@@ -32,7 +32,18 @@ exports.getPendingUploads = async (req, res) => {
   try {
     // Include fileUrl so admin can preview the document
     const uploads = await Upload.find({ status: 'pending' }).populate('uploader', 'name email phone');
-    res.json(uploads);
+    
+    // Add backup status to each upload
+    const uploadsWithBackupStatus = uploads.map(upload => ({
+      ...upload.toObject(),
+      backupStatus: {
+        hasLocalFile: !!upload.filePath,
+        hasCloudinaryBackup: !!upload.cloudinaryPublicId,
+        isSafe: !!upload.cloudinaryPublicId // Safe if it has Cloudinary backup
+      }
+    }));
+    
+    res.json(uploadsWithBackupStatus);
   } catch (err) {
     res.status(500).send('Server Error');
   }

@@ -43,6 +43,18 @@ exports.uploadFile = async (req, res) => {
     const filePath = `/uploads/${req.file.filename}`;
     const fileName = req.file.originalname;
 
+    // Backup to Cloudinary for data loss prevention
+    let cloudinaryPublicId = null;
+    try {
+      const publicId = `course_correct/${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const result = await uploadToCloudinary(req.file.buffer, 'course_correct', publicId);
+      cloudinaryPublicId = result.public_id;
+      console.log(`✓ File backed up to Cloudinary: ${cloudinaryPublicId}`);
+    } catch (cloudErr) {
+      console.warn(`⚠ Cloudinary backup failed: ${cloudErr.message} - continuing with local storage`);
+      // Don't fail the upload, local storage is still valid
+    }
+
     const newUpload = new Upload({
       title,
       courseCode,
@@ -51,6 +63,7 @@ exports.uploadFile = async (req, res) => {
       price: Number(price),
       filePath,
       fileName,
+      cloudinaryPublicId, // Store backup ID
       uploader: req.user.id
     });
 
@@ -62,7 +75,8 @@ exports.uploadFile = async (req, res) => {
         id: newUpload._id,
         title: newUpload.title,
         courseCode: newUpload.courseCode,
-        status: newUpload.status
+        status: newUpload.status,
+        hasBackup: !!cloudinaryPublicId
       }
     });
   } catch (err) {

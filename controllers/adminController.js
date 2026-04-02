@@ -11,8 +11,24 @@ const toE164 = (phone) => {
   return `+${digits}`;
 };
 
+exports.getStats = async (req, res) => {
+  try {
+    const [totalUploads, pendingUploads, approvedUploads, rejectedUploads, pendingWithdrawals] = await Promise.all([
+      Upload.countDocuments(),
+      Upload.countDocuments({ status: 'pending' }),
+      Upload.countDocuments({ status: 'approved' }),
+      Upload.countDocuments({ status: 'rejected' }),
+      Withdrawal.countDocuments({ status: 'pending' }),
+    ]);
+    res.json({ totalUploads, pendingUploads, approvedUploads, rejectedUploads, pendingWithdrawals });
+  } catch (err) {
+    res.status(500).send('Server Error');
+  }
+};
+
 exports.getPendingUploads = async (req, res) => {
   try {
+    // Include fileUrl so admin can preview the document
     const uploads = await Upload.find({ status: 'pending' }).populate('uploader', 'name email phone');
     res.json(uploads);
   } catch (err) {

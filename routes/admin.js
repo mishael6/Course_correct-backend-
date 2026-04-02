@@ -2,10 +2,17 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
 const adminAuth = require('../middleware/adminAuth');
-const { getPendingUploads, updateUploadStatus, getPendingWithdrawals, approveWithdrawal } = require('../controllers/adminController');
+const {
+  getStats,
+  getPendingUploads,
+  updateUploadStatus,
+  getPendingWithdrawals,
+  approveWithdrawal
+} = require('../controllers/adminController');
 
 router.use(auth, adminAuth);
 
+router.get('/stats', getStats);
 router.get('/uploads/pending', getPendingUploads);
 router.put('/uploads/:id/status', updateUploadStatus);
 router.get('/withdrawals/pending', getPendingWithdrawals);

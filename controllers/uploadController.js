@@ -46,8 +46,17 @@ exports.uploadFile = async (req, res) => {
     // Backup to Cloudinary for data loss prevention
     let cloudinaryPublicId = null;
     try {
+      // Get file buffer (either from memory or read from disk)
+      let fileBuffer = req.file.buffer;
+      
+      if (!fileBuffer) {
+        // If using disk storage, req.file.buffer is undefined, so read from disk
+        const fullPath = path.join(__dirname, '../uploads', req.file.filename);
+        fileBuffer = fs.readFileSync(fullPath);
+      }
+
       const publicId = `course_correct/${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const result = await uploadToCloudinary(req.file.buffer, 'course_correct', publicId);
+      const result = await uploadToCloudinary(fileBuffer, 'course_correct', publicId);
       cloudinaryPublicId = result.public_id;
       console.log(`✓ File backed up to Cloudinary: ${cloudinaryPublicId}`);
     } catch (cloudErr) {

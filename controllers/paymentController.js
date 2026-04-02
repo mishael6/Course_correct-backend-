@@ -5,7 +5,8 @@ const User = require('../models/User');
 const { activateSubscription } = require('./subscriptionController');
 const payloqa = require('../services/payloqa');
 
-// ─── Helper: normalise phone to E.164 (Ghana) ────────────────────────────────
+const SUBSCRIPTION_PRICE = 15;
+
 const toE164 = (phone) => {
   const digits = phone.replace(/\D/g, '');
   if (digits.startsWith('233')) return `+${digits}`;
@@ -13,118 +14,61 @@ const toE164 = (phone) => {
   return `+${digits}`;
 };
 
-// ─── POST /api/payments/initiate ─────────────────────────────────────────────
-exports.initiatePayment = async (req, res) => {
+// ─── POST /api/payments/create-pending ───────────────────────────────────────
+// Creates a pending transaction and returns its ID for the Payloqa widget
+exports.createPendingTransaction = async (req, res) => {
   try {
-    const { uploadId, network } = req.body;
+    const { type, uploadId } = req.body;
 
-    if (!network) {
-      return res.status(400).json({ message: 'Please provide your MoMo network (mtn, vodafone, airteltigo)' });
+    let amount = SUBSCRIPTION_PRICE;
+    let upload = null;
+
+    if (type === 'per-paper') {
+      if (!uploadId) return res.status(400).json({ message: 'uploadId required for per-paper payment' });
+      upload = await Upload.findById(uploadId);
+      if (!upload) return res.status(404).json({ message: 'Upload not found' });
+      if (upload.status !== 'approved') return res.status(400).json({ message: 'Document not available' });
+      amount = upload.price;
     }
-
-    const upload = await Upload.findById(uploadId);
-    if (!upload) return res.status(404).json({ message: 'Upload not found' });
-    if (upload.status !== 'approved') return res.status(400).json({ message: 'Document is not available for purchase' });
-
-    const buyer = await User.findById(req.user.id);
-    const phone = toE164(buyer.phone);
 
     const transaction = new Transaction({
       buyer: req.user.id,
-      upload: uploadId,
-      amount: upload.price,
-      type: 'per-paper',
+      upload: upload?._id || null,
+      amount,
+      type,
       status: 'pending'
     });
-    await transaction.save();
 
-    const payloqaRes = await payloqa.initiatePayment({
-      amount: upload.price,
-      phone,
-      network,
-      orderId: transaction._id.toString(),
-      metadata: {
-        transaction_id: transaction._id.toString(),
-        upload_title: upload.title,
-        buyer_name: buyer.name,
-        type: 'per-paper'
-      }
-    });
-
-    transaction.payloqaTransactionId = payloqaRes.payment_id;
-    await transaction.save();
-
-    await payloqa.sendSMS(phone, payloqa.sms.paymentInitiated(upload.price.toFixed(2), upload.title));
-
-    res.json({
-      message: 'Payment initiated. Approve the MoMo prompt on your phone.',
-      transactionId: transaction._id,
-      payloqaPaymentId: payloqaRes.payment_id
-    });
-  } catch (err) {
-    console.error('Payment initiation error:', err.message);
-    res.status(500).json({ message: err.message || 'Server Error' });
-  }
-};
-
-// ─── POST /api/payments/subscription ─────────────────────────────────────────
-exports.initiateSubscriptionPayment = async (req, res) => {
-  try {
-    const { network } = req.body;
-    const SUBSCRIPTION_PRICE = 15;
-
-    if (!network) {
-      return res.status(400).json({ message: 'Please provide your MoMo network (mtn, vodafone, airteltigo)' });
-    }
-
-    const buyer = await User.findById(req.user.id);
-    const phone = toE164(buyer.phone);
-
-    const transaction = new Transaction({
-      buyer: req.user.id,
-      upload: null,
-      amount: SUBSCRIPTION_PRICE,
-      type: 'subscription',
-      status: 'pending'
-    });
-    await transaction.save();
-
-    const payloqaRes = await payloqa.initiatePayment({
-      amount: SUBSCRIPTION_PRICE,
-      phone,
-      network,
-      orderId: transaction._id.toString(),
-      metadata: {
-        transaction_id: transaction._id.toString(),
-        buyer_name: buyer.name,
-        type: 'subscription'
-      }
-    });
-
-    transaction.payloqaTransactionId = payloqaRes.payment_id;
     await transaction.save();
 
     res.json({
-      message: 'Subscription payment initiated. Approve the MoMo prompt on your phone.',
       transactionId: transaction._id,
-      payloqaPaymentId: payloqaRes.payment_id,
-      amount: SUBSCRIPTION_PRICE
+      amount,
+      message: 'Transaction created. Complete payment via widget.'
     });
   } catch (err) {
-    console.error('Subscription payment error:', err.message);
+    console.error('create-pending error:', err.message);
     res.status(500).json({ message: err.message || 'Server Error' });
   }
 };
 
 // ─── POST /api/payments/webhook ───────────────────────────────────────────────
+// Called by Payloqa widget when payment status changes
 exports.payloqaWebhook = async (req, res) => {
   res.status(200).json({ received: true }); // Always ack immediately
 
   try {
-    const { order_id, status } = req.body;
+    console.log('Webhook received:', JSON.stringify(req.body));
 
-    const transaction = await Transaction.findById(order_id).populate('upload');
-    if (!transaction) return console.error('Webhook: transaction not found', order_id);
+    // Payloqa widget sends order_id as the transaction ID
+    const { order_id, status, metadata } = req.body;
+
+    // Support both order_id and metadata.transaction_id
+    const txId = order_id || metadata?.transaction_id;
+    if (!txId) return console.error('Webhook: no transaction ID found');
+
+    const transaction = await Transaction.findById(txId).populate('upload');
+    if (!transaction) return console.error('Webhook: transaction not found', txId);
     if (transaction.status === 'completed' || transaction.status === 'failed') return;
 
     if (status === 'completed') {
@@ -132,14 +76,22 @@ exports.payloqaWebhook = async (req, res) => {
       await transaction.save();
 
       const buyer = await User.findById(transaction.buyer);
-      const buyerPhone = buyer ? toE164(buyer.phone) : null;
+      const buyerPhone = buyer?.phone ? toE164(buyer.phone) : null;
 
+      // ── Subscription ──────────────────────────────────────────────────────
       if (transaction.type === 'subscription') {
-        const sub = await activateSubscription(transaction.buyer, transaction.amount, transaction.payloqaTransactionId);
-        const expiryDate = new Date(sub.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        const sub = await activateSubscription(
+          transaction.buyer,
+          transaction.amount,
+          txId
+        );
+        const expiryDate = new Date(sub.expiresAt).toLocaleDateString('en-GB', {
+          day: 'numeric', month: 'short', year: 'numeric'
+        });
         if (buyerPhone) await payloqa.sendSMS(buyerPhone, payloqa.sms.subscriptionActive(expiryDate));
       }
 
+      // ── Per-paper ─────────────────────────────────────────────────────────
       if (transaction.type === 'per-paper' && transaction.upload) {
         const upload = transaction.upload;
 
@@ -160,7 +112,7 @@ exports.payloqaWebhook = async (req, res) => {
         await upload.save();
 
         if (buyerPhone) {
-          await payloqa.sendSMS(buyerPhone, payloqa.sms.purchaseSuccess(upload.title, 'https://coursecorrect.com/dashboard'));
+          await payloqa.sendSMS(buyerPhone, payloqa.sms.purchaseSuccess(upload.title, 'https://coursecorrect.netlify.app/dashboard'));
         }
       }
 
@@ -177,8 +129,10 @@ exports.payloqaWebhook = async (req, res) => {
 // ─── GET /api/payments/status/:payloqaPaymentId ───────────────────────────────
 exports.getPaymentStatus = async (req, res) => {
   try {
-    const status = await payloqa.getPaymentStatus(req.params.payloqaPaymentId);
-    res.json(status);
+    // Look up our transaction by ID
+    const transaction = await Transaction.findById(req.params.payloqaPaymentId);
+    if (!transaction) return res.status(404).json({ message: 'Transaction not found' });
+    res.json({ status: transaction.status, amount: transaction.amount });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

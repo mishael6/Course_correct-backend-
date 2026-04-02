@@ -13,7 +13,8 @@ module.exports = function (req, res, next) {
 
   // Check if no token
   if (!token) {
-    return res.status(401).json({ message: 'No token, authorization denied' });
+    console.warn(`⚠ Auth failed for ${req.method} ${req.path}: No token provided`);
+    return res.status(401).json({ message: 'No authentication token. Please log in.' });
   }
 
   // Verify token
@@ -22,6 +23,7 @@ module.exports = function (req, res, next) {
     req.user = decoded.user;
     next();
   } catch (err) {
-    res.status(401).json({ message: 'Token is not valid' });
+    console.warn(`⚠ Auth failed for ${req.method} ${req.path}: Invalid token - ${err.message}`);
+    return res.status(401).json({ message: 'Token is invalid or expired. Please log in again.' });
   }
 };

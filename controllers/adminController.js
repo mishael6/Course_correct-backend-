@@ -3,6 +3,7 @@ const Withdrawal = require('../models/Withdrawal');
 const Wallet = require('../models/Wallet');
 const User = require('../models/User');
 const payloqa = require('../services/payloqa');
+const cloudinary = require('../config/cloudinary');
 
 const toE164 = (phone) => {
   const digits = phone.replace(/\D/g, '');
@@ -92,6 +93,34 @@ exports.approveWithdrawal = async (req, res) => {
 
     res.json({ message: 'Withdrawal approved', withdrawal });
   } catch (err) {
+    res.status(500).send('Server Error');
+  }
+};
+
+// ─── Admin Download Upload (for review) ────────────────────────────────────────
+exports.downloadUpload = async (req, res) => {
+  try {
+    const upload = await Upload.findById(req.params.id);
+
+    if (!upload) {
+      return res.status(404).json({ message: 'Upload not found' });
+    }
+
+    // Generate fresh public URL from public_id (admins bypass status/access checks)
+    const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
+      resource_type: 'raw',
+      type: 'upload',
+      secure: true,
+      format: 'pdf'
+    });
+
+    res.json({
+      fileUrl: publicUrl,
+      title: upload.title,
+      expiresIn: '1 hour'
+    });
+  } catch (err) {
+    console.error(err.message);
     res.status(500).send('Server Error');
   }
 };

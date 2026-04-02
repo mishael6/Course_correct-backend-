@@ -5,6 +5,7 @@ const User = require('../models/User');
 const payloqa = require('../services/payloqa');
 const cloudinary = require('../config/cloudinary');
 const path = require('path');
+const fileRecovery = require('../services/fileRecovery');
 
 const toE164 = (phone) => {
   const digits = phone.replace(/\D/g, '');
@@ -160,5 +161,57 @@ exports.downloadUpload = async (req, res) => {
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');
+  }
+};
+
+// ─── File Recovery Endpoints ────────────────────────────────────────────────────
+/**
+ * Get recovery status - shows which files are missing and can be recovered
+ */
+exports.getRecoveryStatus = async (req, res) => {
+  try {
+    const status = await fileRecovery.getRecoveryStatus();
+    res.json(status);
+  } catch (err) {
+    console.error('Recovery status error:', err.message);
+    res.status(500).json({ message: 'Failed to get recovery status', error: err.message });
+  }
+};
+
+/**
+ * Recover a single file from Cloudinary backup
+ */
+exports.recoverUpload = async (req, res) => {
+  try {
+    const { uploadId } = req.params;
+    const result = await fileRecovery.recoverUpload(uploadId);
+    
+    if (result.success) {
+      res.json({ 
+        message: 'File recovered successfully',
+        ...result 
+      });
+    } else {
+      res.status(400).json({ message: result.message });
+    }
+  } catch (err) {
+    console.error('Recovery error:', err.message);
+    res.status(500).json({ message: 'Recovery failed', error: err.message });
+  }
+};
+
+/**
+ * Recover all missing files from Cloudinary backup
+ */
+exports.recoverAllMissing = async (req, res) => {
+  try {
+    const result = await fileRecovery.recoverAllMissing();
+    res.json({ 
+      message: 'Recovery process completed',
+      summary: result 
+    });
+  } catch (err) {
+    console.error('Batch recovery error:', err.message);
+    res.status(500).json({ message: 'Batch recovery failed', error: err.message });
   }
 };

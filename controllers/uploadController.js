@@ -5,7 +5,7 @@ const streamifier = require('streamifier');
 const path = require('path');
 const fs = require('fs');
 
-// ─── Helper: upload buffer to Cloudinary (kept for backward compat) ─────────────────────────────────────
+// ─── Helper: upload buffer to Cloudinary ─────────────────────────────────────
 const uploadToCloudinary = (buffer, folder, publicId) => {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
@@ -13,8 +13,8 @@ const uploadToCloudinary = (buffer, folder, publicId) => {
         folder,
         public_id: publicId,
         resource_type: 'raw',
-        type: 'upload',         // 'upload' = publicly accessible URL
-        access_mode: 'public',  // explicitly allow public delivery
+        type: 'upload',
+        access_mode: 'public',
         format: 'pdf'
       },
       (error, result) => {
@@ -26,6 +26,39 @@ const uploadToCloudinary = (buffer, folder, publicId) => {
   });
 };
 
+// ─── Helper: get the best available download URL ──────────────────────────────
+// Priority: local disk → Cloudinary URL → generate from public ID
+const resolveFileUrl = (upload, req) => {
+  // 1. Try local disk first (fastest)
+  if (upload.filePath) {
+    const uploadsDir = path.join(__dirname, '../uploads');
+    const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
+    if (fs.existsSync(fullPath)) {
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const filename = path.basename(upload.filePath);
+      return `${baseUrl}/uploads/${encodeURIComponent(filename)}`;
+    }
+    console.warn(`Local file missing for "${upload.title}" — falling back to Cloudinary`);
+  }
+
+  // 2. Use stored Cloudinary secure_url (permanent)
+  if (upload.fileUrl) {
+    return upload.fileUrl;
+  }
+
+  // 3. Generate URL from cloudinaryPublicId
+  if (upload.cloudinaryPublicId) {
+    return cloudinary.url(upload.cloudinaryPublicId, {
+      resource_type: 'raw',
+      type: 'upload',
+      secure: true,
+      format: 'pdf'
+    });
+  }
+
+  return null;
+};
+
 // ─── POST /api/uploads ────────────────────────────────────────────────────────
 exports.uploadFile = async (req, res) => {
   try {
@@ -34,35 +67,31 @@ exports.uploadFile = async (req, res) => {
     }
 
     const { title, courseCode, institution, year, price } = req.body;
-
     if (!title || !courseCode || !institution || !year || !price) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    // File is already saved to disk by multer
     const filePath = `/uploads/${req.file.filename}`;
     const fileName = req.file.originalname;
 
-    // Backup to Cloudinary for data loss prevention
+    // Upload to Cloudinary as permanent backup
     let cloudinaryPublicId = null;
+    let fileUrl = null;
+
     try {
-      // Get file buffer (either from memory or read from disk)
       let fileBuffer = req.file.buffer;
-      
       if (!fileBuffer) {
-        // If using disk storage, req.file.buffer is undefined, so read from disk
         const fullPath = path.join(__dirname, '../uploads', req.file.filename);
         fileBuffer = fs.readFileSync(fullPath);
       }
 
-      // Generate unique public ID - don't include folder in ID, it goes in options
       const publicId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const result = await uploadToCloudinary(fileBuffer, 'course_correct', publicId);
       cloudinaryPublicId = result.public_id;
-      console.log(`✓ File backed up to Cloudinary: ${cloudinaryPublicId}`);
+      fileUrl = result.secure_url; // Store the permanent URL
+      console.log(`✓ Backed up to Cloudinary: ${cloudinaryPublicId}`);
     } catch (cloudErr) {
-      console.warn(`⚠ Cloudinary backup failed: ${cloudErr.message} - continuing with local storage`);
-      // Don't fail the upload, local storage is still valid
+      console.warn(`⚠ Cloudinary backup failed: ${cloudErr.message}`);
     }
 
     const newUpload = new Upload({
@@ -73,7 +102,8 @@ exports.uploadFile = async (req, res) => {
       price: Number(price),
       filePath,
       fileName,
-      cloudinaryPublicId, // Store backup ID
+      fileUrl,             // Permanent Cloudinary URL
+      cloudinaryPublicId,  // For deletion and URL generation
       uploader: req.user.id
     });
 
@@ -111,8 +141,21 @@ exports.getMarketplaceUploads = async (req, res) => {
 
     const uploads = await Upload.find(query)
       .populate('uploader', 'name')
-      .select('-fileUrl -cloudinaryPublicId');
+      .select('-filePath -fileUrl -cloudinaryPublicId');
 
+    res.json(uploads);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server Error');
+  }
+};
+
+// ─── GET /api/uploads/mine ────────────────────────────────────────────────────
+exports.getMyUploads = async (req, res) => {
+  try {
+    const uploads = await Upload.find({ uploader: req.user.id })
+      .select('-filePath -fileUrl -cloudinaryPublicId')
+      .sort({ createdAt: -1 });
     res.json(uploads);
   } catch (err) {
     console.error(err.message);
@@ -125,7 +168,7 @@ exports.getUploadById = async (req, res) => {
   try {
     const upload = await Upload.findById(req.params.id)
       .populate('uploader', 'name')
-      .select('-fileUrl -cloudinaryPublicId');
+      .select('-filePath -fileUrl -cloudinaryPublicId');
 
     if (!upload) return res.status(404).json({ message: 'Upload not found' });
     res.json(upload);
@@ -144,62 +187,49 @@ exports.downloadUpload = async (req, res) => {
       return res.status(404).json({ message: 'Document not found' });
     }
 
-    let accessReason = 'none';
-
-    // Admins get free access to all approved documents
-    if (req.user.role === 'admin') {
-      accessReason = 'admin';
-    } else {
-      // Regular users need subscription or per-paper purchase
+    // Access check — admins bypass
+    if (req.user.role !== 'admin') {
       const { canAccess, reason } = await checkAccess(req.user.id, req.params.id);
-
       if (!canAccess) {
         return res.status(403).json({
           message: 'Access denied. Subscribe or purchase this document to download.',
           options: ['subscribe', 'buy']
         });
       }
-
-      accessReason = reason;
     }
 
-    // Serve from local file storage (primary)
-    if (upload.filePath) {
-      const uploadsDir = path.join(__dirname, '../uploads');
-      const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
-      
-      if (fs.existsSync(fullPath)) {
-        // File exists - return direct URL for download
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        const filename = path.basename(upload.filePath);
-        const encodedPath = `/uploads/${encodeURIComponent(filename)}`;
-        
-        return res.json({
-          fileUrl: `${baseUrl}${encodedPath}`,
-          title: upload.title,
-          accessType: accessReason,
-          expiresIn: 'permanent'
-        });
-      } else {
-        // Local file missing
-        console.warn(`Local file missing for upload ${upload._id}`);
-        if (upload.cloudinaryPublicId) {
-          // Suggest admin can recover from backup
-          return res.status(404).json({
-            message: 'File temporarily unavailable. Has Cloudinary backup. Please contact admin to recover.',
-            hasBackup: true,
-            uploadId: upload._id,
-            cloudinaryId: upload.cloudinaryPublicId
-          });
-        } else {
-          return res.status(404).json({ 
-            message: 'File not found. Please contact admin.' 
-          });
-        }
-      }
-    } else {
-      return res.status(404).json({ message: 'File not found' });
+    // Resolve best available URL (local → Cloudinary URL → generated URL)
+    const fileUrl = resolveFileUrl(upload, req);
+
+    if (!fileUrl) {
+      return res.status(404).json({ message: 'File not found. Please contact admin.' });
     }
+
+    res.json({
+      fileUrl,
+      title: upload.title,
+      accessType: req.user.role === 'admin' ? 'admin' : 'purchased'
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server Error');
+  }
+};
+
+// ─── GET /api/uploads/:id/preview ────────────────────────────────────────────
+// Admin-only: get file URL for preview before approval
+exports.previewUpload = async (req, res) => {
+  try {
+    const upload = await Upload.findById(req.params.id);
+    if (!upload) return res.status(404).json({ message: 'Upload not found' });
+
+    const fileUrl = resolveFileUrl(upload, req);
+
+    if (!fileUrl) {
+      return res.status(404).json({ message: 'File not available for preview' });
+    }
+
+    res.json({ fileUrl, title: upload.title });
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');
@@ -210,7 +240,6 @@ exports.downloadUpload = async (req, res) => {
 exports.deleteUpload = async (req, res) => {
   try {
     const upload = await Upload.findById(req.params.id);
-
     if (!upload) return res.status(404).json({ message: 'Upload not found' });
 
     if (upload.uploader.toString() !== req.user.id) {
@@ -220,10 +249,15 @@ exports.deleteUpload = async (req, res) => {
       return res.status(400).json({ message: 'Cannot delete an approved document' });
     }
 
+    // Delete from Cloudinary
     if (upload.cloudinaryPublicId) {
-      await cloudinary.uploader.destroy(upload.cloudinaryPublicId, {
-        resource_type: 'raw'
-      });
+      await cloudinary.uploader.destroy(upload.cloudinaryPublicId, { resource_type: 'raw' });
+    }
+
+    // Delete local file
+    if (upload.filePath) {
+      const fullPath = path.join(__dirname, '../uploads', path.basename(upload.filePath));
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
     }
 
     await upload.deleteOne();

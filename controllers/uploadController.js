@@ -120,13 +120,23 @@ exports.downloadUpload = async (req, res) => {
       return res.status(404).json({ message: 'Document not found' });
     }
 
-    const { canAccess, reason } = await checkAccess(req.user.id, req.params.id);
+    let accessReason = 'none';
 
-    if (!canAccess) {
-      return res.status(403).json({
-        message: 'Access denied. Subscribe or purchase this document to download.',
-        options: ['subscribe', 'buy']
-      });
+    // Admins get free access to all approved documents
+    if (req.user.role === 'admin') {
+      accessReason = 'admin';
+    } else {
+      // Regular users need subscription or per-paper purchase
+      const { canAccess, reason } = await checkAccess(req.user.id, req.params.id);
+
+      if (!canAccess) {
+        return res.status(403).json({
+          message: 'Access denied. Subscribe or purchase this document to download.',
+          options: ['subscribe', 'buy']
+        });
+      }
+
+      accessReason = reason;
     }
 
     // If using local file storage
@@ -135,7 +145,7 @@ exports.downloadUpload = async (req, res) => {
       res.json({
         fileUrl: `${baseUrl}${upload.filePath}`,
         title: upload.title,
-        accessType: reason,
+        accessType: accessReason,
         expiresIn: '1 hour'
       });
     } 
@@ -149,7 +159,7 @@ exports.downloadUpload = async (req, res) => {
       res.json({
         fileUrl: publicUrl,
         title: upload.title,
-        accessType: reason,
+        accessType: accessReason,
         expiresIn: '1 hour'
       });
     } else {

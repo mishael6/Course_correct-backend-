@@ -11,6 +11,8 @@ const uploadToCloudinary = (buffer, folder, publicId) => {
         folder,
         public_id: publicId,
         resource_type: 'raw',
+        type: 'upload',         // 'upload' = publicly accessible URL
+        access_mode: 'public',  // explicitly allow public delivery
         format: 'pdf'
       },
       (error, result) => {
@@ -131,9 +133,16 @@ exports.downloadUpload = async (req, res) => {
       });
     }
 
-    // Use stored Cloudinary URL directly
+    // Generate fresh public URL from public_id
+    const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
+      resource_type: 'raw',
+      type: 'upload',
+      secure: true,
+      format: 'pdf'
+    });
+
     res.json({
-      fileUrl: upload.fileUrl,
+      fileUrl: publicUrl,
       title: upload.title,
       accessType: reason,
       expiresIn: '1 hour'

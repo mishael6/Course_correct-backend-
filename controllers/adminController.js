@@ -109,15 +109,47 @@ exports.downloadUpload = async (req, res) => {
 
     // If using local file storage
     if (upload.filePath) {
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
-      res.json({
-        fileUrl: `${baseUrl}${upload.filePath}`,
-        title: upload.title,
-        expiresIn: 'permanent'
-      });
+      const path = require('path');
+      const fs = require('fs');
+      
+      // Check if file actually exists on disk
+      const uploadsDir = path.join(__dirname, '../uploads');
+      const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
+      
+      if (fs.existsSync(fullPath)) {
+        // File exists - return URL with proper encoding
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const filename = path.basename(upload.filePath);
+        const encodedPath = `/uploads/${encodeURIComponent(filename)}`;
+        
+        res.json({
+          fileUrl: `${baseUrl}${encodedPath}`,
+          title: upload.title,
+          expiresIn: 'permanent'
+        });
+      } else if (upload.cloudinaryPublicId) {
+        // Local file missing - fallback to Cloudinary if available
+        const cloudinary = require('../config/cloudinary');
+        console.warn(`Local file missing for upload ${upload._id}, using Cloudinary fallback`);
+        const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
+          resource_type: 'raw',
+          type: 'upload',
+          secure: true
+        });
+        res.json({
+          fileUrl: publicUrl,
+          title: upload.title,
+          expiresIn: '1 hour'
+        });
+      } else {
+        return res.status(404).json({ 
+          message: 'File not found on server. Please contact admin.' 
+        });
+      }
     }
     // Fallback for old Cloudinary records
     else if (upload.cloudinaryPublicId) {
+      const cloudinary = require('../config/cloudinary');
       const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
         resource_type: 'raw',
         type: 'upload',

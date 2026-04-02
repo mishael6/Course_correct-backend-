@@ -61,7 +61,7 @@ async function backupExistingFiles() {
           if (fs.existsSync(fullPath)) {
             // Read and upload to Cloudinary
             const fileBuffer = fs.readFileSync(fullPath);
-            const publicId = `course_correct_backup/${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const publicId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             const result = await uploadToCloudinary(fileBuffer, 'course_correct', publicId);
 
             // Update database

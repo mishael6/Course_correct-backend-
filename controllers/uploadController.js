@@ -55,7 +55,8 @@ exports.uploadFile = async (req, res) => {
         fileBuffer = fs.readFileSync(fullPath);
       }
 
-      const publicId = `course_correct/${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      // Generate unique public ID - don't include folder in ID, it goes in options
+      const publicId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const result = await uploadToCloudinary(fileBuffer, 'course_correct', publicId);
       cloudinaryPublicId = result.public_id;
       console.log(`✓ File backed up to Cloudinary: ${cloudinaryPublicId}`);
@@ -186,7 +187,8 @@ exports.downloadUpload = async (req, res) => {
         const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
           resource_type: 'raw',
           type: 'upload',
-          secure: true
+          secure: true,
+          format: 'pdf'
         });
         res.json({
           fileUrl: publicUrl,
@@ -205,7 +207,8 @@ exports.downloadUpload = async (req, res) => {
       const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
         resource_type: 'raw',
         type: 'upload',
-        secure: true
+        secure: true,
+        format: 'pdf'
       });
       res.json({
         fileUrl: publicUrl,

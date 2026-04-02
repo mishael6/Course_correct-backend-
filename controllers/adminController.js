@@ -145,7 +145,8 @@ exports.downloadUpload = async (req, res) => {
         const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
           resource_type: 'raw',
           type: 'upload',
-          secure: true
+          secure: true,
+          format: 'pdf'
         });
         res.json({
           fileUrl: publicUrl,
@@ -164,7 +165,8 @@ exports.downloadUpload = async (req, res) => {
       const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
         resource_type: 'raw',
         type: 'upload',
-        secure: true
+        secure: true,
+        format: 'pdf'
       });
       res.json({
         fileUrl: publicUrl,

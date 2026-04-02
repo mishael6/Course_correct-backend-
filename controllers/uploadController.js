@@ -35,14 +35,16 @@ exports.uploadFile = async (req, res) => {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    const publicId = `${courseCode.replace(/\s+/g, '_')}_${Date.now()}`;
+    const folder = 'course_correct/documents';
+    const filename = `${courseCode.replace(/\s+/g, '_')}_${Date.now()}`;
 
     const cloudinaryResult = await uploadToCloudinary(
       req.file.buffer,
-      'course_correct/documents',
-      publicId
+      folder,
+      filename
     );
 
+    // Use Cloudinary's returned public_id (includes folder path)
     const newUpload = new Upload({
       title,
       courseCode,
@@ -50,7 +52,7 @@ exports.uploadFile = async (req, res) => {
       year: Number(year),
       price: Number(price),
       fileUrl: cloudinaryResult.secure_url,
-      cloudinaryPublicId: publicId,
+      cloudinaryPublicId: cloudinaryResult.public_id,
       uploader: req.user.id
     });
 
@@ -129,16 +131,9 @@ exports.downloadUpload = async (req, res) => {
       });
     }
 
-    // Signed URL expires in 1 hour
-    const signedUrl = cloudinary.url(upload.cloudinaryPublicId, {
-      resource_type: 'raw',
-      format: 'pdf',
-      sign_url: true,
-      expires_at: Math.floor(Date.now() / 1000) + 3600
-    });
-
+    // Use stored Cloudinary URL directly
     res.json({
-      fileUrl: signedUrl,
+      fileUrl: upload.fileUrl,
       title: upload.title,
       accessType: reason,
       expiresIn: '1 hour'
@@ -171,21 +166,6 @@ exports.deleteUpload = async (req, res) => {
 
     await upload.deleteOne();
     res.json({ message: 'Upload deleted successfully' });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
-  }
-};
-
-// ─── GET /api/uploads/mine ────────────────────────────────────────────────────
-// Returns all uploads by the currently logged-in user
-exports.getMyUploads = async (req, res) => {
-  try {
-    const uploads = await Upload.find({ uploader: req.user.id })
-      .select('-fileUrl -cloudinaryPublicId')
-      .sort({ createdAt: -1 });
- 
-    res.json(uploads);
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');

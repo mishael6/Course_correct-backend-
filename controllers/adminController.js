@@ -110,8 +110,7 @@ exports.downloadUpload = async (req, res) => {
     const publicUrl = cloudinary.url(upload.cloudinaryPublicId, {
       resource_type: 'raw',
       type: 'upload',
-      secure: true,
-      format: 'pdf'
+      secure: true
     });
 
     res.json({

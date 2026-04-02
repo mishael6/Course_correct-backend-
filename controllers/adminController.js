@@ -109,8 +109,9 @@ exports.downloadUpload = async (req, res) => {
 
     // If using local file storage
     if (upload.filePath) {
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
       res.json({
-        fileUrl: `${process.env.API_URL || 'http://localhost:5000'}${upload.filePath}`,
+        fileUrl: `${baseUrl}${upload.filePath}`,
         title: upload.title,
         expiresIn: 'permanent'
       });

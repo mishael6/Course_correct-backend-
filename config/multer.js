@@ -14,8 +14,10 @@ const storage = multer.diskStorage({
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    // Generate unique filename: courseCode_timestamp.pdf
-    const filename = `${file.originalname.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
+    // Generate unique filename: originalname_timestamp.pdf
+    // Remove .pdf if it already exists in filename
+    let baseName = file.originalname.replace(/\.pdf$/i, '').replace(/\s+/g, '_');
+    const filename = `${baseName}_${Date.now()}.pdf`;
     cb(null, filename);
   }
 });

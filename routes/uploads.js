@@ -13,6 +13,15 @@ const {
   deleteUpload
 } = require('../controllers/uploadController');
 
+// iframes and window.open can't send Authorization headers
+// so support ?token= query param for download and preview
+const authOrToken = (req, res, next) => {
+  if (!req.headers.authorization && req.query.token) {
+    req.headers.authorization = `Bearer ${req.query.token}`;
+  }
+  return auth(req, res, next);
+};
+
 // IMPORTANT: specific routes before parameterized ones (:id catches everything)
 
 // Public
@@ -25,13 +34,6 @@ router.post('/', auth, upload.single('document'), uploadFile);
 // Parameterized routes
 router.get('/:id', getUploadById);
 router.get('/:id/download', authOrToken, downloadUpload);
-// iframes can't send Authorization headers so support ?token= query param
-const authOrToken = (req, res, next) => {
-  if (!req.headers.authorization && req.query.token) {
-    req.headers.authorization = `Bearer ${req.query.token}`;
-  }
-  return auth(req, res, next);
-};
 router.get('/:id/preview', authOrToken, adminAuth, previewUpload);
 router.delete('/:id', auth, deleteUpload);
 

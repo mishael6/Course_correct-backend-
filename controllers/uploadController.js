@@ -197,8 +197,6 @@ exports.downloadUpload = async (req, res) => {
     }
 
     const safeTitle = (upload.title || 'document').replace(/[^a-z0-9]/gi, '_');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
 
     // 1. Try local disk (works on localhost, fast)
     if (upload.filePath) {
@@ -211,19 +209,34 @@ exports.downloadUpload = async (req, res) => {
     }
 
     // 2. Stream from Cloudinary (works after Render redeploy)
-    const cloudUrl = getCloudinaryUrl(upload);
+    // Use fileUrl directly — it's the secure_url Cloudinary gave us on upload
+    const cloudUrl = upload.fileUrl || getCloudinaryUrl(upload);
     if (cloudUrl) {
       console.log(`Streaming from Cloudinary: ${cloudUrl}`);
       try {
-        const cloudResponse = await axios.get(cloudUrl, { 
+        const cloudResponse = await axios.get(cloudUrl, {
           responseType: 'stream',
-          timeout: 30000
+          timeout: 30000,
+          headers: { 'Accept': 'application/pdf, */*' }
         });
+
+        // Forward Cloudinary's own headers — avoids blank PDF from header mismatch
+        const contentType = cloudResponse.headers['content-type'] || 'application/pdf';
+        const contentLength = cloudResponse.headers['content-length'];
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
+        if (contentLength) res.setHeader('Content-Length', contentLength);
+
+        cloudResponse.data.on('error', (streamErr) => {
+          console.error('Stream error:', streamErr.message);
+        });
+
         return cloudResponse.data.pipe(res);
       } catch (axiosErr) {
         console.error(`Cloudinary stream failed: ${axiosErr.message}`);
+        console.error(`Status: ${axiosErr.response?.status}`);
         console.error(`URL attempted: ${cloudUrl}`);
-        return res.status(500).json({ 
+        return res.status(500).json({
           message: 'Failed to fetch file from backup. Please contact admin.',
           debug: axiosErr.message
         });
@@ -244,8 +257,6 @@ exports.previewUpload = async (req, res) => {
     if (!upload) return res.status(404).json({ message: 'Upload not found' });
 
     const safeTitle = (upload.title || 'document').replace(/[^a-z0-9]/gi, '_');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
 
     // 1. Local disk
     if (upload.filePath) {
@@ -256,13 +267,19 @@ exports.previewUpload = async (req, res) => {
     }
 
     // 2. Cloudinary
-    const cloudUrl = getCloudinaryUrl(upload);
+    const cloudUrl = upload.fileUrl || getCloudinaryUrl(upload);
     if (cloudUrl) {
       try {
-        const cloudResponse = await axios.get(cloudUrl, { 
+        const cloudResponse = await axios.get(cloudUrl, {
           responseType: 'stream',
-          timeout: 30000
+          timeout: 30000,
+          headers: { 'Accept': 'application/pdf, */*' }
         });
+        const contentType = cloudResponse.headers['content-type'] || 'application/pdf';
+        const contentLength = cloudResponse.headers['content-length'];
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
+        if (contentLength) res.setHeader('Content-Length', contentLength);
         return cloudResponse.data.pipe(res);
       } catch (axiosErr) {
         console.error(`Preview Cloudinary stream failed: ${axiosErr.message}`);

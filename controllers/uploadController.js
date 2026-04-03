@@ -4,6 +4,7 @@ const { checkAccess } = require('./subscriptionController');
 const streamifier = require('streamifier');
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios');
 
 // ─── Helper: upload buffer to Cloudinary ─────────────────────────────────────
 const uploadToCloudinary = (buffer, folder, publicId) => {
@@ -26,32 +27,28 @@ const uploadToCloudinary = (buffer, folder, publicId) => {
   });
 };
 
-// ─── Helper: get the best available download URL ──────────────────────────────
-// Priority: local disk → Cloudinary URL → generate from public ID
-const resolveFileUrl = (upload, req) => {
-  // 1. Try local disk first (fastest)
-  if (upload.filePath) {
-    const uploadsDir = path.join(__dirname, '../uploads');
-    const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
-    if (fs.existsSync(fullPath)) {
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
-      const filename = path.basename(upload.filePath);
-      return `${baseUrl}/uploads/${encodeURIComponent(filename)}`;
-    }
-    console.warn(`Local file missing for "${upload.title}" — falling back to Cloudinary`);
-  }
+// ─── Helper: stream a URL through to the response ────────────────────────────
+const streamUrlToResponse = async (url, res, title) => {
+  const safeTitle = (title || 'document').replace(/[^a-z0-9]/gi, '_');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
+  const response = await axios.get(url, { responseType: 'stream', timeout: 30000 });
+  response.data.pipe(res);
+};
 
-  // 2. Use stored Cloudinary secure_url (permanent)
-  if (upload.fileUrl) {
-    return upload.fileUrl;
-  }
+// ─── Helper: get best URL for a Cloudinary file ───────────────────────────────
+const getCloudinaryUrl = (upload) => {
+  // Use stored secure_url first (most reliable)
+  if (upload.fileUrl) return upload.fileUrl;
 
-  // 3. Generate URL from cloudinaryPublicId
+  // Generate signed URL from public_id
   if (upload.cloudinaryPublicId) {
     return cloudinary.url(upload.cloudinaryPublicId, {
       resource_type: 'raw',
       type: 'upload',
       secure: true,
+      sign_url: true,
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
       format: 'pdf'
     });
   }
@@ -88,8 +85,9 @@ exports.uploadFile = async (req, res) => {
       const publicId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const result = await uploadToCloudinary(fileBuffer, 'course_correct', publicId);
       cloudinaryPublicId = result.public_id;
-      fileUrl = result.secure_url; // Store the permanent URL
+      fileUrl = result.secure_url;
       console.log(`✓ Backed up to Cloudinary: ${cloudinaryPublicId}`);
+      console.log(`✓ Cloudinary URL: ${fileUrl}`);
     } catch (cloudErr) {
       console.warn(`⚠ Cloudinary backup failed: ${cloudErr.message}`);
     }
@@ -102,8 +100,8 @@ exports.uploadFile = async (req, res) => {
       price: Number(price),
       filePath,
       fileName,
-      fileUrl,             // Permanent Cloudinary URL
-      cloudinaryPublicId,  // For deletion and URL generation
+      fileUrl,
+      cloudinaryPublicId,
       uploader: req.user.id
     });
 
@@ -198,95 +196,84 @@ exports.downloadUpload = async (req, res) => {
       }
     }
 
-    // 1. Try serving from local disk (fastest, works on localhost)
+    const safeTitle = (upload.title || 'document').replace(/[^a-z0-9]/gi, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
+
+    // 1. Try local disk (works on localhost, fast)
     if (upload.filePath) {
-      const uploadsDir = path.join(__dirname, '../uploads');
-      const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
+      const fullPath = path.join(__dirname, '../uploads', path.basename(upload.filePath));
       if (fs.existsSync(fullPath)) {
-        const safeTitle = upload.title.replace(/[^a-z0-9]/gi, '_');
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
+        console.log(`Serving from disk: ${fullPath}`);
         return fs.createReadStream(fullPath).pipe(res);
       }
-      console.warn(`Local file missing for "${upload.title}" — streaming from Cloudinary`);
+      console.warn(`Local file missing: ${upload.filePath}`);
     }
 
-    // 2. Stream from Cloudinary through backend (bypasses Cloudinary auth)
-    if (upload.cloudinaryPublicId || upload.fileUrl) {
-      const axios = require('axios');
-
-      // Generate a signed URL valid for 1 hour
-      const signedUrl = cloudinary.url(upload.cloudinaryPublicId || '', {
-        resource_type: 'raw',
-        type: 'upload',
-        secure: true,
-        sign_url: true,
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-        format: 'pdf'
-      });
-
-      // Use stored fileUrl as fallback if public_id signing fails
-      const fetchUrl = upload.cloudinaryPublicId ? signedUrl : upload.fileUrl;
-
-      const cloudResponse = await axios.get(fetchUrl, { responseType: 'stream' });
-      const safeTitle = upload.title.replace(/[^a-z0-9]/gi, '_');
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
-      return cloudResponse.data.pipe(res);
+    // 2. Stream from Cloudinary (works after Render redeploy)
+    const cloudUrl = getCloudinaryUrl(upload);
+    if (cloudUrl) {
+      console.log(`Streaming from Cloudinary: ${cloudUrl}`);
+      try {
+        const cloudResponse = await axios.get(cloudUrl, { 
+          responseType: 'stream',
+          timeout: 30000
+        });
+        return cloudResponse.data.pipe(res);
+      } catch (axiosErr) {
+        console.error(`Cloudinary stream failed: ${axiosErr.message}`);
+        console.error(`URL attempted: ${cloudUrl}`);
+        return res.status(500).json({ 
+          message: 'Failed to fetch file from backup. Please contact admin.',
+          debug: axiosErr.message
+        });
+      }
     }
 
-    return res.status(404).json({ message: 'File not found. Please contact admin.' });
+    return res.status(404).json({ message: 'File not found. Please re-upload this document.' });
   } catch (err) {
     console.error('Download error:', err.message);
-    res.status(500).send('Server Error');
+    res.status(500).json({ message: 'Server error during download', debug: err.message });
   }
 };
 
 // ─── GET /api/uploads/:id/preview ────────────────────────────────────────────
-// Admin-only: stream file for preview before approval
 exports.previewUpload = async (req, res) => {
   try {
     const upload = await Upload.findById(req.params.id);
     if (!upload) return res.status(404).json({ message: 'Upload not found' });
 
-    const axios = require('axios');
-    const safeTitle = upload.title.replace(/[^a-z0-9]/gi, '_');
+    const safeTitle = (upload.title || 'document').replace(/[^a-z0-9]/gi, '_');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
 
-    // 1. Serve from local disk if available
+    // 1. Local disk
     if (upload.filePath) {
-      const uploadsDir = path.join(__dirname, '../uploads');
-      const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
+      const fullPath = path.join(__dirname, '../uploads', path.basename(upload.filePath));
       if (fs.existsSync(fullPath)) {
         return fs.createReadStream(fullPath).pipe(res);
       }
     }
 
-    // 2. Stream from Cloudinary via signed URL
-    if (upload.cloudinaryPublicId) {
-      const signedUrl = cloudinary.url(upload.cloudinaryPublicId, {
-        resource_type: 'raw',
-        type: 'upload',
-        secure: true,
-        sign_url: true,
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-        format: 'pdf'
-      });
-      const cloudResponse = await axios.get(signedUrl, { responseType: 'stream' });
-      return cloudResponse.data.pipe(res);
+    // 2. Cloudinary
+    const cloudUrl = getCloudinaryUrl(upload);
+    if (cloudUrl) {
+      try {
+        const cloudResponse = await axios.get(cloudUrl, { 
+          responseType: 'stream',
+          timeout: 30000
+        });
+        return cloudResponse.data.pipe(res);
+      } catch (axiosErr) {
+        console.error(`Preview Cloudinary stream failed: ${axiosErr.message}`);
+        return res.status(500).json({ message: 'Failed to load preview from backup.' });
+      }
     }
 
-    // 3. Stream from stored fileUrl
-    if (upload.fileUrl) {
-      const cloudResponse = await axios.get(upload.fileUrl, { responseType: 'stream' });
-      return cloudResponse.data.pipe(res);
-    }
-
-    res.status(404).json({ message: 'File not available for preview' });
+    res.status(404).json({ message: 'File not available for preview.' });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
+    console.error('Preview error:', err.message);
+    res.status(500).json({ message: 'Server error during preview', debug: err.message });
   }
 };
 
@@ -303,12 +290,10 @@ exports.deleteUpload = async (req, res) => {
       return res.status(400).json({ message: 'Cannot delete an approved document' });
     }
 
-    // Delete from Cloudinary
     if (upload.cloudinaryPublicId) {
       await cloudinary.uploader.destroy(upload.cloudinaryPublicId, { resource_type: 'raw' });
     }
 
-    // Delete local file
     if (upload.filePath) {
       const fullPath = path.join(__dirname, '../uploads', path.basename(upload.filePath));
       if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);

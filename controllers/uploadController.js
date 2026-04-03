@@ -189,7 +189,7 @@ exports.downloadUpload = async (req, res) => {
 
     // Access check — admins bypass
     if (req.user.role !== 'admin') {
-      const { canAccess, reason } = await checkAccess(req.user.id, req.params.id);
+      const { canAccess } = await checkAccess(req.user.id, req.params.id);
       if (!canAccess) {
         return res.status(403).json({
           message: 'Access denied. Subscribe or purchase this document to download.',
@@ -198,38 +198,92 @@ exports.downloadUpload = async (req, res) => {
       }
     }
 
-    // Resolve best available URL (local → Cloudinary URL → generated URL)
-    const fileUrl = resolveFileUrl(upload, req);
-
-    if (!fileUrl) {
-      return res.status(404).json({ message: 'File not found. Please contact admin.' });
+    // 1. Try serving from local disk (fastest, works on localhost)
+    if (upload.filePath) {
+      const uploadsDir = path.join(__dirname, '../uploads');
+      const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
+      if (fs.existsSync(fullPath)) {
+        const safeTitle = upload.title.replace(/[^a-z0-9]/gi, '_');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
+        return fs.createReadStream(fullPath).pipe(res);
+      }
+      console.warn(`Local file missing for "${upload.title}" — streaming from Cloudinary`);
     }
 
-    res.json({
-      fileUrl,
-      title: upload.title,
-      accessType: req.user.role === 'admin' ? 'admin' : 'purchased'
-    });
+    // 2. Stream from Cloudinary through backend (bypasses Cloudinary auth)
+    if (upload.cloudinaryPublicId || upload.fileUrl) {
+      const axios = require('axios');
+
+      // Generate a signed URL valid for 1 hour
+      const signedUrl = cloudinary.url(upload.cloudinaryPublicId || '', {
+        resource_type: 'raw',
+        type: 'upload',
+        secure: true,
+        sign_url: true,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        format: 'pdf'
+      });
+
+      // Use stored fileUrl as fallback if public_id signing fails
+      const fetchUrl = upload.cloudinaryPublicId ? signedUrl : upload.fileUrl;
+
+      const cloudResponse = await axios.get(fetchUrl, { responseType: 'stream' });
+      const safeTitle = upload.title.replace(/[^a-z0-9]/gi, '_');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
+      return cloudResponse.data.pipe(res);
+    }
+
+    return res.status(404).json({ message: 'File not found. Please contact admin.' });
   } catch (err) {
-    console.error(err.message);
+    console.error('Download error:', err.message);
     res.status(500).send('Server Error');
   }
 };
 
 // ─── GET /api/uploads/:id/preview ────────────────────────────────────────────
-// Admin-only: get file URL for preview before approval
+// Admin-only: stream file for preview before approval
 exports.previewUpload = async (req, res) => {
   try {
     const upload = await Upload.findById(req.params.id);
     if (!upload) return res.status(404).json({ message: 'Upload not found' });
 
-    const fileUrl = resolveFileUrl(upload, req);
+    const axios = require('axios');
+    const safeTitle = upload.title.replace(/[^a-z0-9]/gi, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
 
-    if (!fileUrl) {
-      return res.status(404).json({ message: 'File not available for preview' });
+    // 1. Serve from local disk if available
+    if (upload.filePath) {
+      const uploadsDir = path.join(__dirname, '../uploads');
+      const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
+      if (fs.existsSync(fullPath)) {
+        return fs.createReadStream(fullPath).pipe(res);
+      }
     }
 
-    res.json({ fileUrl, title: upload.title });
+    // 2. Stream from Cloudinary via signed URL
+    if (upload.cloudinaryPublicId) {
+      const signedUrl = cloudinary.url(upload.cloudinaryPublicId, {
+        resource_type: 'raw',
+        type: 'upload',
+        secure: true,
+        sign_url: true,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        format: 'pdf'
+      });
+      const cloudResponse = await axios.get(signedUrl, { responseType: 'stream' });
+      return cloudResponse.data.pipe(res);
+    }
+
+    // 3. Stream from stored fileUrl
+    if (upload.fileUrl) {
+      const cloudResponse = await axios.get(upload.fileUrl, { responseType: 'stream' });
+      return cloudResponse.data.pipe(res);
+    }
+
+    res.status(404).json({ message: 'File not available for preview' });
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');

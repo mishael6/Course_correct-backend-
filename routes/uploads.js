@@ -24,8 +24,15 @@ router.post('/', auth, upload.single('document'), uploadFile);
 
 // Parameterized routes
 router.get('/:id', getUploadById);
-router.get('/:id/download', auth, downloadUpload);
-router.get('/:id/preview', auth, adminAuth, previewUpload);
+router.get('/:id/download', authOrToken, downloadUpload);
+// iframes can't send Authorization headers so support ?token= query param
+const authOrToken = (req, res, next) => {
+  if (!req.headers.authorization && req.query.token) {
+    req.headers.authorization = `Bearer ${req.query.token}`;
+  }
+  return auth(req, res, next);
+};
+router.get('/:id/preview', authOrToken, adminAuth, previewUpload);
 router.delete('/:id', auth, deleteUpload);
 
 module.exports = router;

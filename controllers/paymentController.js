@@ -142,3 +142,18 @@ exports.getPaymentStatus = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+// ─── GET /api/payments/purchased-uploads ──────────────────────────────────────
+exports.getPurchasedUploadIds = async (req, res) => {
+  try {
+    const transactions = await Transaction.find({ 
+      buyer: req.user.id, 
+      type: 'per-paper', 
+      status: 'completed' 
+    }).select('upload');
+    const uploadIds = transactions.map(t => t.upload);
+    res.json(uploadIds);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

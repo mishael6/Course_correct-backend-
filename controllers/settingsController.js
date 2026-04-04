@@ -61,6 +61,7 @@ exports.updateSettings = async (req, res) => {
     }
 
     const settings = await getSettings();
+    const oldPrice = settings.subscriptionPrice;
 
     if (subscriptionPrice !== undefined) settings.subscriptionPrice = Number(subscriptionPrice);
     if (minUploadPrice !== undefined) settings.minUploadPrice = Number(minUploadPrice);
@@ -72,6 +73,12 @@ exports.updateSettings = async (req, res) => {
 
     settings.updatedBy = req.user.id;
     await settings.save();
+
+    // Auto-update all active subscriptions when price changes
+    if (subscriptionPrice !== undefined && Number(subscriptionPrice) !== oldPrice) {
+      const Subscription = require('../models/Subscription');
+      await Subscription.updateMany({ status: 'active' }, { amount: Number(subscriptionPrice) });
+    }
 
     res.json({ message: 'Settings updated successfully', settings });
   } catch (err) {

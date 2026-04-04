@@ -26,6 +26,12 @@ exports.createPendingTransaction = async (req, res) => {
     const { type, uploadId } = req.body;
 
     let amount = SUBSCRIPTION_PRICE;
+    try {
+      const Settings = require('../models/Settings');
+      const settings = await Settings.findOne({ singleton: true });
+      if (settings?.subscriptionPrice) amount = settings.subscriptionPrice;
+    } catch (e) {}
+
     let upload = null;
 
     if (type === 'per-paper') {

@@ -24,6 +24,7 @@ Upload Request
 ```
 
 Both paths are stored in the database:
+
 ```javascript
 {
   filePath: "/uploads/filename_timestamp.pdf",          // Local
@@ -47,6 +48,7 @@ Admins can see backup status when reviewing pending uploads:
 ```
 
 **Color indicators in Admin Panel:**
+
 - 🟢 **Green**: File has both local + cloud backup (SAFE)
 - 🟡 **Yellow**: File has only local storage (at risk)
 - 🔴 **Red**: File has no backup (contact admin)
@@ -54,6 +56,7 @@ Admins can see backup status when reviewing pending uploads:
 ### 3. Download & Approval
 
 **Admin approves file:**
+
 - Local file remains accessible
 - Cloud backup is always available
 
@@ -74,17 +77,20 @@ Download Request
 ## File Safety Guarantees
 
 ### Scenario 1: Local Storage Fails
+
 - Student loses local /uploads folder
 - Admin reviews → Still can preview from Cloudinary backup
 - Student downloads → Automatic fallback to Cloudinary
 - **Result: No data loss** ✓
 
 ### Scenario 2: Server Restart
+
 - Local cache might be cleared
 - Files are restored from Cloudinary on first access
 - **Result: No permanent loss** ✓
 
 ### Scenario 3: Accidental Deletion
+
 - Admin or system deletes local files
 - Cloudinary backup still exists
 - **Result: File can be recovered** ✓
@@ -92,9 +98,11 @@ Download Request
 ## Admin Features
 
 ### View Backup Status
+
 Endpoint: `GET /api/admin/uploads` (pending only)
 
 Shows backup status for each pending upload:
+
 ```json
 {
   "_id": "507f1f77bcf86cd799439011",
@@ -119,6 +127,7 @@ node scripts/backup-existing-uploads.js
 ```
 
 This command:
+
 1. Finds all approved uploads without Cloudinary backup
 2. Uploads them to Cloudinary
 3. Updates the database
@@ -127,6 +136,7 @@ This command:
 ## Testing Data Loss Prevention
 
 ### Test 1: Local File Missing
+
 ```bash
 # Delete a local file
 rm backend/uploads/some_file.pdf
@@ -137,11 +147,13 @@ rm backend/uploads/some_file.pdf
 ```
 
 ### Test 2: Verify Admin Can Review
+
 1. Go to Admin Panel
 2. View pending uploads
 3. See "View PDF" button can open files (from local or Cloudinary)
 
 ### Test 3: Verify Student Can Download After Approval
+
 1. Admin approves file
 2. Student purchases/subscribes
 3. Click download
@@ -152,6 +164,7 @@ rm backend/uploads/some_file.pdf
 ### Cloudinary Integration
 
 Make sure your `.env` has:
+
 ```
 CLOUDINARY_NAME=your_cloud_name
 CLOUDINARY_API_KEY=your_api_key
@@ -167,6 +180,7 @@ CLOUDINARY_API_SECRET=your_api_secret
 ## What Happens to Failed Uploads?
 
 If Cloudinary backup fails:
+
 - File still saves locally
 - Warning logged: "⚠ Cloudinary backup failed"
 - Upload continues (doesn't fail)
@@ -188,12 +202,14 @@ cloudinary download [public_id]
 ## Summary: Before vs After
 
 ### Before (Local Only)
+
 - ❌ Files lost if server crashes
 - ❌ No backup mechanism
 - ❌ No data redundancy
 - ❌ Difficult to recover
 
 ### After (Hybrid Storage)
+
 - ✅ Automatic cloud backup
 - ✅ Fallback to Cloudinary
 - ✅ Data redundancy

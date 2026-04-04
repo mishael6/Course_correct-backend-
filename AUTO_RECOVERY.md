@@ -11,6 +11,7 @@ The auto-recovery system automatically restores missing uploaded files from Clou
 ## 🎯 How Recovery Works
 
 ### For Students (Automatic)
+
 1. Student clicks "Download" on a document
 2. System checks if file exists on disk
 3. **If missing** → System automatically downloads file from Cloudinary backup
@@ -22,16 +23,20 @@ The auto-recovery system automatically restores missing uploaded files from Clou
 ### For Admins (Manual Controls)
 
 #### Check Recovery Status
+
 ```
 GET /admin/recovery/status
 ```
+
 Returns:
+
 - Total approved uploads
 - How many files currently exist locally
 - How many files are recoverable from backup
 - Detailed list of each file
 
 Example response:
+
 ```json
 {
   "totalApproved": 15,
@@ -52,17 +57,20 @@ Example response:
 ```
 
 #### Manually Recover a Single File
+
 ```
 POST /admin/recovery/{uploadId}
 ```
 
 Example:
+
 ```bash
 curl -X POST "http://localhost:5000/admin/recovery/507f1f77bcf86cd799439011" \
   -H "Authorization: Bearer <admin_token>"
 ```
 
 Response:
+
 ```json
 {
   "message": "File recovered successfully",
@@ -74,6 +82,7 @@ Response:
 ```
 
 #### Recover All Missing Files
+
 ```
 POST /admin/recovery-all/run
 ```
@@ -81,12 +90,14 @@ POST /admin/recovery-all/run
 Automatically restores **all** missing files from Cloudinary backups in one operation.
 
 Example:
+
 ```bash
 curl -X POST "http://localhost:5000/admin/recovery-all/run" \
   -H "Authorization: Bearer <admin_token>"
 ```
 
 Response:
+
 ```json
 {
   "message": "Recovery process completed",
@@ -111,6 +122,7 @@ node scripts/recover-files.js
 ```
 
 Output:
+
 ```
 🔗 Connecting to MongoDB...
 ✅ Connected!
@@ -136,14 +148,17 @@ Output:
 ## 🔒 Safety Guarantees
 
 ### What's Protected
+
 ✅ **Backed up to Cloudinary** → File can be recovered  
 ✅ **Local file exists** → No action needed  
-✅ **No local file, but backup exists** → Auto-recovers on download  
+✅ **No local file, but backup exists** → Auto-recovers on download
 
 ### What's NOT Protected
+
 ❌ **No local file + No Cloudinary backup** → File is lost (this shouldn't happen)
 
 ### Recovery Requirements
+
 - ✅ Cloudinary credentials configured (`CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`)
 - ✅ MongoDB database accessible
 - ✅ `/uploads` directory exists and is writable
@@ -179,6 +194,7 @@ The system logs recovery operations to console:
 ## ⚙️ How It's Implemented
 
 ### Upload Flow (When File is Saved)
+
 ```
 1. Student uploads PDF → Multer saves to /uploads/filename.pdf
 2. File is read from disk
@@ -189,6 +205,7 @@ The system logs recovery operations to console:
 ```
 
 ### Download Flow (When Student Requests File)
+
 ```
 1. Admin requests file download
 2. Check if /uploads/filename.pdf exists
@@ -199,6 +216,7 @@ The system logs recovery operations to console:
 ```
 
 ### Recovery Process
+
 ```
 1. Get Cloudinary download URL from cloudinaryPublicId
 2. Stream download from Cloudinary
@@ -233,6 +251,7 @@ The system logs recovery operations to console:
 ## 🎬 Testing Recovery
 
 ### Test 1: Automatic Recovery on Download
+
 ```bash
 # 1. Upload a file normally (creates backup)
 # 2. Manually delete the local file:
@@ -245,6 +264,7 @@ curl http://localhost:5000/uploads/TestDoc_.pdf
 ```
 
 ### Test 2: Manual Recovery via API
+
 ```bash
 # 1. Find upload ID from database or admin panel
 uploadId="507f1f77bcf86cd799439011"
@@ -263,6 +283,7 @@ ls -lh backend/uploads/ | grep TestDoc
 ```
 
 ### Test 3: Batch Recovery
+
 ```bash
 # 1. Delete all local files
 rm -rf backend/uploads/*
@@ -279,26 +300,33 @@ curl -X POST "http://localhost:5000/admin/recovery-all/run" \
 ## 🔧 Troubleshooting
 
 ### Issue: "Recovery failed: No such file or directory"
+
 **Cause**: `/uploads` directory doesn't exist  
 **Fix**: Create it: `mkdir -p backend/uploads`
 
 ### Issue: "Recovery failed: timeout"
+
 **Cause**: Cloudinary API unreachable or very slow  
-**Fix**: 
+**Fix**:
+
 - Check internet connection
 - Verify Cloudinary credentials are correct
 - Try again (might be temporary)
 
 ### Issue: "Recovery failed: ERR_INVALID_ARG_TYPE"
+
 **Cause**: Invalid Cloudinary ID or configuration  
 **Fix**:
+
 - Verify `CLOUDINARY_CLOUD_NAME` is set correctly
 - Check that file was actually uploaded to Cloudinary
 - Run diagnostic: `node scripts/recover-missing-files.js`
 
 ### Issue: Files Never Recovered
+
 **Cause**: Missing Cloudinary backup  
-**Fix**: 
+**Fix**:
+
 - Run backup script on existing files: `node scripts/backup-existing-uploads.js`
 - Ensure new uploads have `cloudinaryPublicId` in database
 - Check Upload schema has both fields: `filePath` and `cloudinaryPublicId`
@@ -316,11 +344,11 @@ curl -X POST "http://localhost:5000/admin/recovery-all/run" \
 
 ## 🎓 Summary
 
-| Scenario | What Happens | User Experience |
-|----------|--------------|-----------------|
-| **Normal download** | Served from local disk | ⚡ Instant |
-| **After Render redeploy** | Auto-recovered on first request | 🔄 Slower first time, instant after |
-| **Admin triggers recovery** | Manual restore via API | ✅ All files restored immediately |
-| **File never backed up** | Returns 404 error | ❌ File is lost |
+| Scenario                    | What Happens                    | User Experience                     |
+| --------------------------- | ------------------------------- | ----------------------------------- |
+| **Normal download**         | Served from local disk          | ⚡ Instant                          |
+| **After Render redeploy**   | Auto-recovered on first request | 🔄 Slower first time, instant after |
+| **Admin triggers recovery** | Manual restore via API          | ✅ All files restored immediately   |
+| **File never backed up**    | Returns 404 error               | ❌ File is lost                     |
 
 **Bottom Line**: Your files are safe as long as they were uploaded successfully to Cloudinary (which happens automatically). Render's redeploys won't cause data loss - just a brief delay on the first download after a redeploy.

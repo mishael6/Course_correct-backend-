@@ -1,59 +1,33 @@
 const Upload = require('../models/Upload');
-const cloudinary = require('../config/cloudinary');
+const supabase = require('../config/supabase');
 const { checkAccess } = require('./subscriptionController');
-const streamifier = require('streamifier');
 const path = require('path');
 const fs = require('fs');
-const axios = require('axios');
 
-// ─── Helper: upload buffer to Cloudinary ─────────────────────────────────────
-const uploadToCloudinary = (buffer, folder, publicId) => {
-  return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      {
-        folder,
-        public_id: publicId,
-        resource_type: 'raw',
-        type: 'upload',
-        access_mode: 'public',
-        format: 'pdf'
-      },
-      (error, result) => {
-        if (error) return reject(error);
-        resolve(result);
-      }
-    );
-    streamifier.createReadStream(buffer).pipe(uploadStream);
-  });
-};
+const BUCKET = 'documents';
 
-// ─── Helper: stream a URL through to the response ────────────────────────────
-const streamUrlToResponse = async (url, res, title) => {
-  const safeTitle = (title || 'document').replace(/[^a-z0-9]/gi, '_');
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
-  const response = await axios.get(url, { responseType: 'stream', timeout: 30000 });
-  response.data.pipe(res);
-};
+// ─── Helper: upload buffer to Supabase Storage ────────────────────────────────
+const uploadToSupabase = async (buffer, filename) => {
+  const filePath = `uploads/${Date.now()}_${filename.replace(/\s+/g, '_')}`;
 
-// ─── Helper: get best URL for a Cloudinary file ───────────────────────────────
-const getCloudinaryUrl = (upload) => {
-  // Use stored secure_url first (most reliable)
-  if (upload.fileUrl) return upload.fileUrl;
-
-  // Generate signed URL from public_id
-  if (upload.cloudinaryPublicId) {
-    return cloudinary.url(upload.cloudinaryPublicId, {
-      resource_type: 'raw',
-      type: 'upload',
-      secure: true,
-      sign_url: true,
-      expires_at: Math.floor(Date.now() / 1000) + 3600,
-      format: 'pdf'
+  const { data, error } = await supabase.storage
+    .from(BUCKET)
+    .upload(filePath, buffer, {
+      contentType: 'application/pdf',
+      upsert: false
     });
-  }
 
-  return null;
+  if (error) throw new Error(`Supabase upload failed: ${error.message}`);
+
+  // Get permanent public URL
+  const { data: urlData } = supabase.storage
+    .from(BUCKET)
+    .getPublicUrl(filePath);
+
+  return {
+    path: filePath,
+    publicUrl: urlData.publicUrl
+  };
 };
 
 // ─── POST /api/uploads ────────────────────────────────────────────────────────
@@ -68,29 +42,30 @@ exports.uploadFile = async (req, res) => {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    const filePath = `/uploads/${req.file.filename}`;
-    const fileName = req.file.originalname;
+    // Get file buffer
+    let fileBuffer = req.file.buffer;
+    if (!fileBuffer) {
+      const fullPath = path.join(__dirname, '../uploads', req.file.filename);
+      fileBuffer = fs.readFileSync(fullPath);
+    }
 
-    // Upload to Cloudinary as permanent backup
-    let cloudinaryPublicId = null;
+    // Upload to Supabase
     let fileUrl = null;
+    let supabasePath = null;
 
     try {
-      let fileBuffer = req.file.buffer;
-      if (!fileBuffer) {
-        const fullPath = path.join(__dirname, '../uploads', req.file.filename);
-        fileBuffer = fs.readFileSync(fullPath);
-      }
-
-      const publicId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const result = await uploadToCloudinary(fileBuffer, 'course_correct', publicId);
-      cloudinaryPublicId = result.public_id;
-      fileUrl = result.secure_url;
-      console.log(`✓ Backed up to Cloudinary: ${cloudinaryPublicId}`);
-      console.log(`✓ Cloudinary URL: ${fileUrl}`);
-    } catch (cloudErr) {
-      console.warn(`⚠ Cloudinary backup failed: ${cloudErr.message}`);
+      const result = await uploadToSupabase(fileBuffer, req.file.originalname);
+      fileUrl = result.publicUrl;
+      supabasePath = result.path;
+      console.log(`✓ Uploaded to Supabase: ${supabasePath}`);
+      console.log(`✓ Public URL: ${fileUrl}`);
+    } catch (uploadErr) {
+      console.error(`Supabase upload failed: ${uploadErr.message}`);
+      return res.status(500).json({ message: 'File upload failed. Please try again.' });
     }
+
+    // Also save local path if using disk storage
+    const filePath = req.file.filename ? `/uploads/${req.file.filename}` : null;
 
     const newUpload = new Upload({
       title,
@@ -99,9 +74,9 @@ exports.uploadFile = async (req, res) => {
       year: Number(year),
       price: Number(price),
       filePath,
-      fileName,
-      fileUrl,
-      cloudinaryPublicId,
+      fileName: req.file.originalname,
+      fileUrl,           // Permanent Supabase public URL
+      supabasePath,      // For deletion
       uploader: req.user.id
     });
 
@@ -113,8 +88,7 @@ exports.uploadFile = async (req, res) => {
         id: newUpload._id,
         title: newUpload.title,
         courseCode: newUpload.courseCode,
-        status: newUpload.status,
-        hasBackup: !!cloudinaryPublicId
+        status: newUpload.status
       }
     });
   } catch (err) {
@@ -139,7 +113,7 @@ exports.getMarketplaceUploads = async (req, res) => {
 
     const uploads = await Upload.find(query)
       .populate('uploader', 'name')
-      .select('-filePath -fileUrl -cloudinaryPublicId');
+      .select('-filePath -fileUrl -supabasePath -cloudinaryPublicId');
 
     res.json(uploads);
   } catch (err) {
@@ -152,7 +126,7 @@ exports.getMarketplaceUploads = async (req, res) => {
 exports.getMyUploads = async (req, res) => {
   try {
     const uploads = await Upload.find({ uploader: req.user.id })
-      .select('-filePath -fileUrl -cloudinaryPublicId')
+      .select('-filePath -fileUrl -supabasePath -cloudinaryPublicId')
       .sort({ createdAt: -1 });
     res.json(uploads);
   } catch (err) {
@@ -166,7 +140,7 @@ exports.getUploadById = async (req, res) => {
   try {
     const upload = await Upload.findById(req.params.id)
       .populate('uploader', 'name')
-      .select('-filePath -fileUrl -cloudinaryPublicId');
+      .select('-filePath -fileUrl -supabasePath -cloudinaryPublicId');
 
     if (!upload) return res.status(404).json({ message: 'Upload not found' });
     res.json(upload);
@@ -198,55 +172,48 @@ exports.downloadUpload = async (req, res) => {
 
     const safeTitle = (upload.title || 'document').replace(/[^a-z0-9]/gi, '_');
 
-    // 1. Try local disk (works on localhost, fast)
+    // 1. Try local disk (fast, works on localhost)
     if (upload.filePath) {
       const fullPath = path.join(__dirname, '../uploads', path.basename(upload.filePath));
       if (fs.existsSync(fullPath)) {
         console.log(`Serving from disk: ${fullPath}`);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
         return fs.createReadStream(fullPath).pipe(res);
       }
-      console.warn(`Local file missing: ${upload.filePath}`);
     }
 
-    // 2. Stream from Cloudinary (works after Render redeploy)
-    // Use fileUrl directly — it's the secure_url Cloudinary gave us on upload
-    const cloudUrl = upload.fileUrl || getCloudinaryUrl(upload);
-    if (cloudUrl) {
-      console.log(`Streaming from Cloudinary: ${cloudUrl}`);
+    // 2. Stream from Supabase (permanent, always works)
+    if (upload.supabasePath || upload.fileUrl) {
+      console.log(`Streaming from Supabase: ${upload.supabasePath}`);
       try {
-        const cloudResponse = await axios.get(cloudUrl, {
-          responseType: 'stream',
-          timeout: 30000,
-          headers: { 'Accept': 'application/pdf, */*' }
-        });
+        // Download via Supabase SDK — authenticated, always works
+        const { data, error } = await supabase.storage
+          .from(BUCKET)
+          .download(upload.supabasePath);
 
-        // Forward Cloudinary's own headers — avoids blank PDF from header mismatch
-        const contentType = cloudResponse.headers['content-type'] || 'application/pdf';
-        const contentLength = cloudResponse.headers['content-length'];
-        res.setHeader('Content-Type', contentType);
+        if (error) throw new Error(error.message);
+
+        const arrayBuffer = await data.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
-        if (contentLength) res.setHeader('Content-Length', contentLength);
-
-        cloudResponse.data.on('error', (streamErr) => {
-          console.error('Stream error:', streamErr.message);
-        });
-
-        return cloudResponse.data.pipe(res);
-      } catch (axiosErr) {
-        console.error(`Cloudinary stream failed: ${axiosErr.message}`);
-        console.error(`Status: ${axiosErr.response?.status}`);
-        console.error(`URL attempted: ${cloudUrl}`);
-        return res.status(500).json({
-          message: 'Failed to fetch file from backup. Please contact admin.',
-          debug: axiosErr.message
-        });
+        res.setHeader('Content-Length', buffer.length);
+        return res.send(buffer);
+      } catch (supaErr) {
+        console.error(`Supabase download failed: ${supaErr.message}`);
+        // Last resort — redirect to public URL
+        if (upload.fileUrl) {
+          return res.redirect(upload.fileUrl);
+        }
       }
     }
 
-    return res.status(404).json({ message: 'File not found. Please re-upload this document.' });
+    return res.status(404).json({ message: 'File not found. Please contact admin.' });
   } catch (err) {
     console.error('Download error:', err.message);
-    res.status(500).json({ message: 'Server error during download', debug: err.message });
+    res.status(500).json({ message: 'Server error during download' });
   }
 };
 
@@ -262,35 +229,42 @@ exports.previewUpload = async (req, res) => {
     if (upload.filePath) {
       const fullPath = path.join(__dirname, '../uploads', path.basename(upload.filePath));
       if (fs.existsSync(fullPath)) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
         return fs.createReadStream(fullPath).pipe(res);
       }
     }
 
-    // 2. Cloudinary
-    const cloudUrl = upload.fileUrl || getCloudinaryUrl(upload);
-    if (cloudUrl) {
+    // 2. Supabase SDK download
+    if (upload.supabasePath) {
       try {
-        const cloudResponse = await axios.get(cloudUrl, {
-          responseType: 'stream',
-          timeout: 30000,
-          headers: { 'Accept': 'application/pdf, */*' }
-        });
-        const contentType = cloudResponse.headers['content-type'] || 'application/pdf';
-        const contentLength = cloudResponse.headers['content-length'];
-        res.setHeader('Content-Type', contentType);
+        const { data, error } = await supabase.storage
+          .from(BUCKET)
+          .download(upload.supabasePath);
+
+        if (error) throw new Error(error.message);
+
+        const arrayBuffer = await data.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `inline; filename="${safeTitle}.pdf"`);
-        if (contentLength) res.setHeader('Content-Length', contentLength);
-        return cloudResponse.data.pipe(res);
-      } catch (axiosErr) {
-        console.error(`Preview Cloudinary stream failed: ${axiosErr.message}`);
-        return res.status(500).json({ message: 'Failed to load preview from backup.' });
+        res.setHeader('Content-Length', buffer.length);
+        return res.send(buffer);
+      } catch (supaErr) {
+        console.error(`Supabase preview failed: ${supaErr.message}`);
       }
+    }
+
+    // 3. Redirect to public URL
+    if (upload.fileUrl) {
+      return res.redirect(upload.fileUrl);
     }
 
     res.status(404).json({ message: 'File not available for preview.' });
   } catch (err) {
     console.error('Preview error:', err.message);
-    res.status(500).json({ message: 'Server error during preview', debug: err.message });
+    res.status(500).json({ message: 'Server error during preview' });
   }
 };
 
@@ -307,10 +281,15 @@ exports.deleteUpload = async (req, res) => {
       return res.status(400).json({ message: 'Cannot delete an approved document' });
     }
 
-    if (upload.cloudinaryPublicId) {
-      await cloudinary.uploader.destroy(upload.cloudinaryPublicId, { resource_type: 'raw' });
+    // Delete from Supabase
+    if (upload.supabasePath) {
+      const { error } = await supabase.storage
+        .from(BUCKET)
+        .remove([upload.supabasePath]);
+      if (error) console.warn(`Supabase delete failed: ${error.message}`);
     }
 
+    // Delete local file
     if (upload.filePath) {
       const fullPath = path.join(__dirname, '../uploads', path.basename(upload.filePath));
       if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);

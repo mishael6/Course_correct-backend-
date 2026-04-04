@@ -3,9 +3,6 @@ const Withdrawal = require('../models/Withdrawal');
 const Wallet = require('../models/Wallet');
 const User = require('../models/User');
 const payloqa = require('../services/payloqa');
-const cloudinary = require('../config/cloudinary');
-const path = require('path');
-const fileRecovery = require('../services/fileRecovery');
 
 const toE164 = (phone) => {
   const digits = phone.replace(/\D/g, '');
@@ -14,42 +11,69 @@ const toE164 = (phone) => {
   return `+${digits}`;
 };
 
+// ─── GET /api/admin/stats ─────────────────────────────────────────────────────
 exports.getStats = async (req, res) => {
   try {
-    const [totalUploads, pendingUploads, approvedUploads, rejectedUploads, pendingWithdrawals] = await Promise.all([
+    const [
+      totalUploads, pendingUploads, approvedUploads, rejectedUploads,
+      pendingWithdrawals, totalUsers, totalStudents
+    ] = await Promise.all([
       Upload.countDocuments(),
       Upload.countDocuments({ status: 'pending' }),
       Upload.countDocuments({ status: 'approved' }),
       Upload.countDocuments({ status: 'rejected' }),
       Withdrawal.countDocuments({ status: 'pending' }),
+      User.countDocuments(),
+      User.countDocuments({ role: 'student' }),
     ]);
-    res.json({ totalUploads, pendingUploads, approvedUploads, rejectedUploads, pendingWithdrawals });
+
+    // Total withdrawn
+    const withdrawalAgg = await Withdrawal.aggregate([
+      { $match: { status: 'approved' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+
+    res.json({
+      totalUploads, pendingUploads, approvedUploads, rejectedUploads,
+      pendingWithdrawals, totalUsers, totalStudents,
+      totalWithdrawn: withdrawalAgg[0]?.total || 0
+    });
   } catch (err) {
     res.status(500).send('Server Error');
   }
 };
 
+// ─── GET /api/admin/uploads/pending ──────────────────────────────────────────
 exports.getPendingUploads = async (req, res) => {
   try {
-    // Include fileUrl so admin can preview the document
-    const uploads = await Upload.find({ status: 'pending' }).populate('uploader', 'name email phone');
-    
-    // Add backup status to each upload
-    const uploadsWithBackupStatus = uploads.map(upload => ({
-      ...upload.toObject(),
-      backupStatus: {
-        hasLocalFile: !!upload.filePath,
-        hasCloudinaryBackup: !!upload.cloudinaryPublicId,
-        isSafe: !!upload.cloudinaryPublicId // Safe if it has Cloudinary backup
-      }
-    }));
-    
-    res.json(uploadsWithBackupStatus);
+    const uploads = await Upload.find({ status: 'pending' })
+      .populate('uploader', 'name email phone')
+      .sort({ createdAt: -1 });
+    res.json(uploads);
   } catch (err) {
     res.status(500).send('Server Error');
   }
 };
 
+// ─── GET /api/admin/uploads ───────────────────────────────────────────────────
+exports.getAllUploads = async (req, res) => {
+  try {
+    const { status, search } = req.query;
+    let query = {};
+    if (status) query.status = status;
+    if (search) query.title = { $regex: search, $options: 'i' };
+
+    const uploads = await Upload.find(query)
+      .populate('uploader', 'name email')
+      .select('-filePath -fileUrl -supabasePath -cloudinaryPublicId')
+      .sort({ createdAt: -1 });
+    res.json(uploads);
+  } catch (err) {
+    res.status(500).send('Server Error');
+  }
+};
+
+// ─── PUT /api/admin/uploads/:id/status ───────────────────────────────────────
 exports.updateUploadStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -62,7 +86,6 @@ exports.updateUploadStatus = async (req, res) => {
 
     if (!upload) return res.status(404).json({ message: 'Upload not found' });
 
-    // SMS uploader
     if (upload.uploader?.phone) {
       const phone = toE164(upload.uploader.phone);
       const message = status === 'approved'
@@ -77,15 +100,19 @@ exports.updateUploadStatus = async (req, res) => {
   }
 };
 
+// ─── GET /api/admin/withdrawals/pending ──────────────────────────────────────
 exports.getPendingWithdrawals = async (req, res) => {
   try {
-    const withdrawals = await Withdrawal.find({ status: 'pending' }).populate('user', 'name email phone');
+    const withdrawals = await Withdrawal.find({ status: 'pending' })
+      .populate('user', 'name email phone')
+      .sort({ createdAt: -1 });
     res.json(withdrawals);
   } catch (err) {
     res.status(500).send('Server Error');
   }
 };
 
+// ─── PUT /api/admin/withdrawals/:id/approve ───────────────────────────────────
 exports.approveWithdrawal = async (req, res) => {
   try {
     const withdrawal = await Withdrawal.findById(req.params.id).populate('user', 'name phone');
@@ -96,7 +123,6 @@ exports.approveWithdrawal = async (req, res) => {
     withdrawal.status = 'approved';
     await withdrawal.save();
 
-    // SMS user about payout
     if (withdrawal.user?.phone) {
       await payloqa.sendSMS(
         toE164(withdrawal.user.phone),
@@ -110,108 +136,26 @@ exports.approveWithdrawal = async (req, res) => {
   }
 };
 
-// ─── Admin Download Upload (for review) ────────────────────────────────────────
-exports.downloadUpload = async (req, res) => {
+// ─── GET /api/admin/users ─────────────────────────────────────────────────────
+exports.getAllUsers = async (req, res) => {
   try {
-    const upload = await Upload.findById(req.params.id);
+    const users = await User.find({ role: 'student' })
+      .select('-password')
+      .sort({ createdAt: -1 });
 
-    if (!upload) {
-      return res.status(404).json({ message: 'Upload not found' });
-    }
+    // Get wallet balances
+    const wallets = await Wallet.find({ user: { $in: users.map(u => u._id) } });
+    const walletMap = {};
+    wallets.forEach(w => { walletMap[w.user.toString()] = w; });
 
-    // Serve from local file storage (primary)
-    if (upload.filePath) {
-      const path = require('path');
-      const fs = require('fs');
-      
-      // Check if file actually exists on disk
-      const uploadsDir = path.join(__dirname, '../uploads');
-      const fullPath = path.join(uploadsDir, path.basename(upload.filePath));
-      
-      if (fs.existsSync(fullPath)) {
-        // File exists - return URL with proper encoding
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        const filename = path.basename(upload.filePath);
-        const encodedPath = `/uploads/${encodeURIComponent(filename)}`;
-        
-        return res.json({
-          fileUrl: `${baseUrl}${encodedPath}`,
-          title: upload.title,
-          expiresIn: 'permanent'
-        });
-      } else {
-        // Local file missing
-        console.warn(`Local file missing for upload ${upload._id}`);
-        if (upload.cloudinaryPublicId) {
-          return res.status(404).json({
-            message: 'File not available locally. Has Cloudinary backup for recovery.',
-            hasBackup: true,
-            uploadId: upload._id,
-            cloudinaryId: upload.cloudinaryPublicId
-          });
-        } else {
-          return res.status(404).json({ 
-            message: 'File not found on server.' 
-          });
-        }
-      }
-    } else {
-      return res.status(404).json({ message: 'File not found' });
-    }
+    const result = users.map(u => ({
+      ...u.toObject(),
+      balance: walletMap[u._id.toString()]?.balance || 0,
+      totalEarnings: walletMap[u._id.toString()]?.totalEarnings || 0,
+    }));
+
+    res.json(result);
   } catch (err) {
-    console.error(err.message);
     res.status(500).send('Server Error');
-  }
-};
-
-// ─── File Recovery Endpoints ────────────────────────────────────────────────────
-/**
- * Get recovery status - shows which files are missing and can be recovered
- */
-exports.getRecoveryStatus = async (req, res) => {
-  try {
-    const status = await fileRecovery.getRecoveryStatus();
-    res.json(status);
-  } catch (err) {
-    console.error('Recovery status error:', err.message);
-    res.status(500).json({ message: 'Failed to get recovery status', error: err.message });
-  }
-};
-
-/**
- * Recover a single file from Cloudinary backup
- */
-exports.recoverUpload = async (req, res) => {
-  try {
-    const { uploadId } = req.params;
-    const result = await fileRecovery.recoverUpload(uploadId);
-    
-    if (result.success) {
-      res.json({ 
-        message: 'File recovered successfully',
-        ...result 
-      });
-    } else {
-      res.status(400).json({ message: result.message });
-    }
-  } catch (err) {
-    console.error('Recovery error:', err.message);
-    res.status(500).json({ message: 'Recovery failed', error: err.message });
-  }
-};
-
-/**
- * Recover all missing files from Cloudinary backup
- */
-exports.recoverAllMissing = async (req, res) => {
-  try {
-    const result = await fileRecovery.recoverAllMissing();
-    res.json({ 
-      message: 'Recovery process completed',
-      summary: result 
-    });
-  } catch (err) {
-    console.error('Batch recovery error:', err.message);
-    res.status(500).json({ message: 'Batch recovery failed', error: err.message });
   }
 };

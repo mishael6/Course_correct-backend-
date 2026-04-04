@@ -42,6 +42,15 @@ exports.uploadFile = async (req, res) => {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
+    // Validate price against platform settings
+    const Settings = require('../models/Settings');
+    const settings = await Settings.findOne({ singleton: true });
+    const minPrice = settings?.minUploadPrice || 1;
+    const maxPrice = settings?.maxUploadPrice || 100;
+    if (Number(price) < minPrice || Number(price) > maxPrice) {
+      return res.status(400).json({ message: `Price must be between GHS ${minPrice} and GHS ${maxPrice}` });
+    }
+
     // Get file buffer
     let fileBuffer = req.file.buffer;
     if (!fileBuffer) {

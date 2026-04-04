@@ -5,7 +5,12 @@ const User = require('../models/User');
 const { activateSubscription } = require('./subscriptionController');
 const payloqa = require('../services/payloqa');
 
-const SUBSCRIPTION_PRICE = 15;
+// Subscription price loaded from settings at runtime
+let SUBSCRIPTION_PRICE = 15;
+const Settings = require('../models/Settings');
+Settings.findOne({ singleton: true }).then(s => {
+  if (s?.subscriptionPrice) SUBSCRIPTION_PRICE = s.subscriptionPrice;
+}).catch(() => {});
 
 const toE164 = (phone) => {
   const digits = phone.replace(/\D/g, '');

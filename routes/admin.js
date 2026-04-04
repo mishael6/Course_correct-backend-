@@ -8,24 +8,33 @@ const {
   updateUploadStatus,
   getPendingWithdrawals,
   approveWithdrawal,
-  downloadUpload,
-  getRecoveryStatus,
-  recoverUpload,
-  recoverAllMissing
+  getAllUsers,
+  getAllUploads,
 } = require('../controllers/adminController');
+const {
+  getAdminSettings,
+  updateSettings
+} = require('../controllers/settingsController');
 
 router.use(auth, adminAuth);
 
+// Stats
 router.get('/stats', getStats);
+
+// Settings
+router.get('/settings', getAdminSettings);
+router.put('/settings', updateSettings);
+
+// Uploads
 router.get('/uploads/pending', getPendingUploads);
-router.get('/uploads/:id/download', downloadUpload);
+router.get('/uploads', getAllUploads);
 router.put('/uploads/:id/status', updateUploadStatus);
+
+// Withdrawals
 router.get('/withdrawals/pending', getPendingWithdrawals);
 router.put('/withdrawals/:id/approve', approveWithdrawal);
 
-// File Recovery Routes
-router.get('/recovery/status', getRecoveryStatus);
-router.post('/recovery/:uploadId', recoverUpload);
-router.post('/recovery-all/run', recoverAllMissing);
+// Users
+router.get('/users', getAllUsers);
 
 module.exports = router;

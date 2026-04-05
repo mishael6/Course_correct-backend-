@@ -22,6 +22,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ['student', 'admin'],
     default: 'student'
+  },
+  downloadsMade: {
+    type: Number,
+    default: 0
   }
 }, { timestamps: true });
 

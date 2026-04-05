@@ -179,6 +179,15 @@ exports.downloadUpload = async (req, res) => {
       }
     }
 
+    // Increment analytics
+    upload.downloadCount = (upload.downloadCount || 0) + 1;
+    await upload.save();
+
+    if (req.user && req.user.role === 'student') {
+      const User = require('../models/User');
+      await User.findByIdAndUpdate(req.user.id, { $inc: { downloadsMade: 1 } });
+    }
+
     const safeTitle = (upload.title || 'document').replace(/[^a-z0-9]/gi, '_');
 
     // 1. Try local disk (fast, works on localhost)

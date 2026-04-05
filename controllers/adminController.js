@@ -34,10 +34,16 @@ exports.getStats = async (req, res) => {
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
 
+    // Total downloads across everything
+    const downloadAgg = await Upload.aggregate([
+      { $group: { _id: null, total: { $sum: '$downloadCount' } } }
+    ]);
+
     res.json({
       totalUploads, pendingUploads, approvedUploads, rejectedUploads,
       pendingWithdrawals, totalUsers, totalStudents,
-      totalWithdrawn: withdrawalAgg[0]?.total || 0
+      totalWithdrawn: withdrawalAgg[0]?.total || 0,
+      totalDownloads: downloadAgg[0]?.total || 0
     });
   } catch (err) {
     res.status(500).send('Server Error');

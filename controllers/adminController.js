@@ -2,6 +2,7 @@ const Upload = require('../models/Upload');
 const Withdrawal = require('../models/Withdrawal');
 const Wallet = require('../models/Wallet');
 const User = require('../models/User');
+const Subscription = require('../models/Subscription');
 const payloqa = require('../services/payloqa');
 
 const toE164 = (phone) => {
@@ -178,10 +179,16 @@ exports.getAllUsers = async (req, res) => {
     const walletMap = {};
     wallets.forEach(w => { walletMap[w.user.toString()] = w; });
 
+    // Get active subscriptions
+    const subscriptions = await Subscription.find({ user: { $in: users.map(u => u._id) }, status: 'active' });
+    const subMap = {};
+    subscriptions.forEach(s => { subMap[s.user.toString()] = s; });
+
     const result = users.map(u => ({
       ...u.toObject(),
       balance: walletMap[u._id.toString()]?.balance || 0,
       totalEarnings: walletMap[u._id.toString()]?.totalEarnings || 0,
+      subscription: subMap[u._id.toString()] || null,
     }));
 
     res.json(result);

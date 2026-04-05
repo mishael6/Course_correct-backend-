@@ -8,6 +8,7 @@ const {
   updateUploadStatus,
   getPendingWithdrawals,
   approveWithdrawal,
+  rejectWithdrawal,
   getAllUsers,
   getAllUploads,
 } = require('../controllers/adminController');
@@ -33,6 +34,7 @@ router.put('/uploads/:id/status', updateUploadStatus);
 // Withdrawals
 router.get('/withdrawals/pending', getPendingWithdrawals);
 router.put('/withdrawals/:id/approve', approveWithdrawal);
+router.put('/withdrawals/:id/reject', rejectWithdrawal);
 
 // Users
 router.get('/users', getAllUsers);

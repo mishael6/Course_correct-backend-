@@ -119,4 +119,7 @@ exports.sms = {
 
   withdrawalApproved: (amount) =>
     `Your withdrawal of GHS ${amount} has been approved and sent to your MoMo number. Check your wallet!`,
+
+  withdrawalRejected: (amount) =>
+    `Your withdrawal of GHS ${amount} has been rejected. The funds have been returned to your CourseCorrect wallet.`,
 };

@@ -136,6 +136,36 @@ exports.approveWithdrawal = async (req, res) => {
   }
 };
 
+// ─── PUT /api/admin/withdrawals/:id/reject ────────────────────────────────────
+exports.rejectWithdrawal = async (req, res) => {
+  try {
+    const withdrawal = await Withdrawal.findById(req.params.id).populate('user', 'name phone');
+    if (!withdrawal || withdrawal.status !== 'pending') {
+      return res.status(400).json({ message: 'Invalid withdrawal record' });
+    }
+
+    withdrawal.status = 'rejected';
+    await withdrawal.save();
+
+    const wallet = await Wallet.findOne({ user: withdrawal.user._id });
+    if (wallet) {
+      wallet.balance += withdrawal.amount;
+      await wallet.save();
+    }
+
+    if (withdrawal.user?.phone) {
+      await payloqa.sendSMS(
+        toE164(withdrawal.user.phone),
+        payloqa.sms.withdrawalRejected(withdrawal.amount.toFixed(2))
+      );
+    }
+
+    res.json({ message: 'Withdrawal rejected', withdrawal });
+  } catch (err) {
+    res.status(500).send('Server Error');
+  }
+};
+
 // ─── GET /api/admin/users ─────────────────────────────────────────────────────
 exports.getAllUsers = async (req, res) => {
   try {

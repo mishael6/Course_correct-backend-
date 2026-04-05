@@ -53,6 +53,7 @@ app.use('/api/payments', require('./routes/payments'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/subscription', require('./routes/subscription'));
+app.use('/api/settings', require('./routes/settings'));
 
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/course_correct';

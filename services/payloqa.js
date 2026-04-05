@@ -72,16 +72,12 @@ exports.getPaymentStatus = async (paymentId) => {
  */
 exports.sendSMS = async (phone, message) => {
   try {
-    const res = await axios.post(
-      `${SMS_BASE}/sms/send`,
-      {
-        recipient_number: phone,
-        sender_id: process.env.PAYLOQA_SENDER_ID || 'CourseCorr',
-        message,
-        usage_message_type: 'notification'
-      },
-      { headers }
-    );
+    const res = await axios.post('https://api.payloqa.com/text/send', {
+      to: phone,
+      message: message
+    }, {
+      headers: { 'Authorization': `Bearer ${process.env.PAYLOQA_API_KEY}` }
+    });
     return res.data;
   } catch (err) {
     // SMS failures should never crash the main flow — just log

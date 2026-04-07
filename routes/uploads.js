@@ -29,7 +29,21 @@ router.get('/', getMarketplaceUploads);
 
 // Authenticated — specific paths first
 router.get('/mine', auth, getMyUploads);
-router.post('/', auth, upload.single('document'), uploadFile);
+router.post('/', auth, function (req, res, next) {
+  upload.single('document')(req, res, function (err) {
+    if (err) {
+      console.error('Multer upload error:', err);
+      if (err.message === 'Only PDF files are allowed') {
+        return res.status(400).json({ message: err.message });
+      }
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ message: 'File is too large. Maximum size is 10MB.' });
+      }
+      return res.status(400).json({ message: `Upload error: ${err.message}` });
+    }
+    next();
+  });
+}, uploadFile);
 
 // Parameterized routes
 router.get('/:id', getUploadById);

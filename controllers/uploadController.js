@@ -102,10 +102,7 @@ exports.uploadFile = async (req, res) => {
     });
   } catch (err) {
     console.error('Upload error:', err.message);
-    if (err.message === 'Only PDF files are allowed') {
-      return res.status(400).json({ message: err.message });
-    }
-    res.status(500).send('Server Error');
+    res.status(500).json({ message: 'Server error during upload. Please try again.' });
   }
 };
 
